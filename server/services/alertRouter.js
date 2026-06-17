@@ -1,22 +1,6 @@
-const admin = require('firebase-admin')
-const path = require('path')
+const { getFirebaseDb } = require('./firebase')
 
-let rtdb = null
-
-function initFirebase() {
-  if (admin.apps.length) {
-    rtdb = admin.database()
-    return
-  }
-  const serviceAccount = require(path.join(__dirname, '..', 'falcon-eye-c03a4-firebase-adminsdk-fbsvc-2267d36e35.json'))
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    databaseURL: process.env.FIREBASE_DATABASE_URL,
-  })
-  rtdb = admin.database()
-}
-
-async function dispatchToReceivers(siteId, siteLabel) {
+async function dispatchToReceivers(rtdb, siteId, siteLabel) {
   const routingSnap = await rtdb.ref(`routing/${siteId}`).get()
   if (!routingSnap.exists()) {
     console.log(`[AlertRouter] No routing config for: ${siteId}`)
@@ -39,7 +23,7 @@ async function dispatchToReceivers(siteId, siteLabel) {
   console.log(`[AlertRouter] ${siteId} → dispatched to: ${receivers.join(', ')}`)
 }
 
-async function clearReceivers(siteId) {
+async function clearReceivers(rtdb, siteId) {
   const routingSnap = await rtdb.ref(`routing/${siteId}`).get()
   if (!routingSnap.exists()) return
 
@@ -59,17 +43,16 @@ async function clearReceivers(siteId) {
 }
 
 function startAlertRouter() {
+  let rtdb
   try {
-    initFirebase()
+    rtdb = getFirebaseDb()
   } catch (err) {
     console.error('[AlertRouter] Firebase init failed:', err.message)
     return
   }
 
-  // Track previous alert states to detect transitions only (not every heartbeat)
   const prevAlertState = {}
 
-  // Seed initial states on startup so we don't false-trigger on boot
   rtdb.ref('sites').once('value', (snap) => {
     if (!snap.exists()) return
     snap.forEach((child) => {
@@ -78,25 +61,22 @@ function startAlertRouter() {
     console.log(`[AlertRouter] Watching ${snap.numChildren()} site(s)`)
   })
 
-  // Live listener — fires whenever any child of sites/ changes
   rtdb.ref('sites').on('child_changed', async (snap) => {
     const siteId   = snap.key
     const siteData = snap.val()
     const wasAlert = prevAlertState[siteId] ?? false
     const isAlert  = siteData.alert === 'true'
 
-    // Only act on a state transition, ignore GPS/heartbeat updates
     if (isAlert === wasAlert) return
     prevAlertState[siteId] = isAlert
 
     if (isAlert) {
-      await dispatchToReceivers(siteId, siteData.label || siteId)
+      await dispatchToReceivers(rtdb, siteId, siteData.label || siteId)
     } else {
-      await clearReceivers(siteId)
+      await clearReceivers(rtdb, siteId)
     }
   })
 
-  // Also watch for new sites added dynamically
   rtdb.ref('sites').on('child_added', (snap) => {
     const siteId = snap.key
     if (prevAlertState[siteId] === undefined) {

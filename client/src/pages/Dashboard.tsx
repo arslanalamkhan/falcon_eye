@@ -1,9 +1,6 @@
 import { Badge } from "@/components/ui/badge"
 import {
   AlertTriangle,
-  Train,
-  HardHat,
-  Shield,
   Radio,
   MapPin,
   Clock,
@@ -58,56 +55,6 @@ export default function Dashboard() {
       trend: activeAlertCount > 0 ? "Immediate response needed" : "All sites clear",
       trendUp: activeAlertCount === 0,
     },
-    {
-      label: "Trains Online",
-      value: "12",
-      sub: "of 14 total",
-      icon: Train,
-      color: "text-primary",
-      bg: "bg-primary/10 border-primary/20",
-      trend: "2 offline",
-      trendUp: false,
-    },
-    {
-      label: "Mining Sites",
-      value: "5",
-      sub: "All sites reporting",
-      icon: HardHat,
-      color: "text-amber-400",
-      bg: "bg-amber-500/10 border-amber-500/20",
-      trend: "Normal ops",
-      trendUp: true,
-    },
-    {
-      label: "QRF Units",
-      value: "8",
-      sub: "4 on standby · 4 deployed",
-      icon: Shield,
-      color: "text-emerald-400",
-      bg: "bg-emerald-500/10 border-emerald-500/20",
-      trend: "Response ready",
-      trendUp: true,
-    },
-    {
-      label: "Active Devices",
-      value: "47",
-      sub: "ESP32 nodes online",
-      icon: Radio,
-      color: "text-violet-400",
-      bg: "bg-violet-500/10 border-violet-500/20",
-      trend: "3 low battery",
-      trendUp: false,
-    },
-    {
-      label: "Avg Response",
-      value: "4.2m",
-      sub: "Target < 5 min",
-      icon: Clock,
-      color: "text-cyan-400",
-      bg: "bg-cyan-500/10 border-cyan-500/20",
-      trend: "-0.8m this week",
-      trendUp: true,
-    },
   ]
 
   return (
@@ -128,7 +75,7 @@ export default function Dashboard() {
       </div>
 
       {/* Stat Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {stats.map((s) => (
           <div
             key={s.label}

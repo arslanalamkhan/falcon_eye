@@ -6,56 +6,32 @@ import {
   LayoutDashboard,
   AlertTriangle,
   MapPin,
-  Radio,
-  Shield,
-  Train,
-  HardHat,
-  Settings,
+  SlidersHorizontal,
   ChevronLeft,
   ChevronRight,
-  Zap,
 } from "lucide-react"
 
 type NavItem = {
   icon: React.ElementType
   label: string
   to: string
-  badge?: number
-  badgeType?: string
 }
 
 const navItems: { group: string; items: NavItem[] }[] = [
   {
     group: "Overview",
     items: [
-      { icon: LayoutDashboard, label: "Dashboard",     to: "/"        },
-      { icon: AlertTriangle,   label: "Active Alerts", to: "/alerts", badge: 3, badgeType: "danger" },
-      { icon: MapPin,          label: "Live Map",      to: "/map"     },
-    ],
-  },
-  {
-    group: "Operations",
-    items: [
-      { icon: Train,    label: "Train Network", to: "/trains"  },
-      { icon: HardHat,  label: "Mining Sites",  to: "/mines"   },
-      { icon: Shield,   label: "QRF Dispatch",  to: "/qrf"     },
-      { icon: Radio,    label: "Devices",        to: "/devices" },
+      { icon: LayoutDashboard, label: "Dashboard", to: "/"     },
+      { icon: MapPin,          label: "Live Map",  to: "/map"  },
     ],
   },
   {
     group: "System",
     items: [
-      { icon: Zap,      label: "Alert History", to: "/history"  },
-      { icon: Settings, label: "Settings",      to: "/settings" },
+      { icon: SlidersHorizontal, label: "Admin Panel", to: "/admin" },
     ],
   },
 ]
-
-const badgeColors: Record<string, string> = {
-  danger:  "bg-red-500/20 text-red-400 border border-red-500/30",
-  warning: "bg-amber-500/20 text-amber-400 border border-amber-500/30",
-  default: "bg-primary/20 text-primary border border-primary/30",
-}
 
 export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false)
@@ -110,19 +86,7 @@ export default function Sidebar() {
                   >
                     <item.icon className="h-4 w-4 shrink-0" />
                     {!collapsed && (
-                      <>
-                        <span className="flex-1 text-left">{item.label}</span>
-                        {item.badge && (
-                          <span
-                            className={cn(
-                              "text-[10px] font-bold px-1.5 py-0.5 rounded-full",
-                              badgeColors[item.badgeType ?? "default"]
-                            )}
-                          >
-                            {item.badge}
-                          </span>
-                        )}
-                      </>
+                      <span className="flex-1 text-left">{item.label}</span>
                     )}
                   </NavLink>
                 </li>
