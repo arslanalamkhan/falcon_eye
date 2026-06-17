@@ -228,6 +228,19 @@ site_id     TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE
 receiver_id TEXT NOT NULL REFERENCES hq_receivers(id) ON DELETE CASCADE
 PRIMARY KEY (site_id, receiver_id)
 created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+
+-- cameras (RTSP cameras attached to sites — added by 003_cameras_schema.js)
+id         SERIAL PRIMARY KEY
+site_id    TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE
+label      TEXT NOT NULL DEFAULT 'Camera'
+ip         TEXT NOT NULL
+port       INTEGER NOT NULL DEFAULT 554
+username   TEXT NOT NULL
+password   TEXT NOT NULL                     -- stored plain-text; never returned in API responses
+channel    INTEGER NOT NULL DEFAULT 1
+subtype    INTEGER NOT NULL DEFAULT 0        -- 0 = main stream, 1 = sub stream
+active     BOOLEAN NOT NULL DEFAULT true
+created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 ```
 
 ---
@@ -272,6 +285,15 @@ created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 | DELETE | `/api/admin/sites/:id` | ✓ | Remove a site |
 | POST | `/api/admin/receivers` | ✓ | Add a receiver |
 | DELETE | `/api/admin/receivers/:id` | ✓ | Remove a receiver |
+| GET | `/api/cameras?siteId=x` | ✓ | Cameras for a site (no passwords) |
+| GET | `/api/cameras/all` | ✓ | All cameras with site info |
+| POST | `/api/cameras` | ✓ admin | Add a camera |
+| PUT | `/api/cameras/:id` | ✓ admin | Update a camera |
+| DELETE | `/api/cameras/:id` | ✓ admin | Delete a camera |
+| POST | `/api/streams/:id/start` | ✓ | Start FFmpeg → HLS stream |
+| GET | `/api/streams/:id/status` | ✓ | Stream status + heartbeat |
+| DELETE | `/api/streams/:id` | ✓ | Stop stream |
+| GET | `/streams/:id/stream.m3u8` | — | HLS playlist (static file) |
 
 ### HTTP Status Codes
 | Situation | Code |

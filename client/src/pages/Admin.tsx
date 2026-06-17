@@ -8,7 +8,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogClose,
 } from "@/components/ui/dialog"
 import {
-  GitBranch, Train, HardHat, Radio, Plus, Trash2,
+  GitBranch, Train, HardHat, Radio, Plus, Trash2, Camera,
   Loader2, Check, X, RefreshCw, AlertCircle, Users, ShieldCheck, KeyRound,
 } from "lucide-react"
 import type { Role } from "@/contexts/AuthContext"
@@ -20,6 +20,10 @@ type Site = {
 type Receiver = {
   id: string; label: string; lea: string; city: string; active: boolean
 }
+type CameraRow = {
+  id: number; site_id: string; label: string; ip: string; port: number
+  channel: number; subtype: number; active: boolean; site_label: string; site_type: string
+}
 type UserRow = {
   id: number; email: string; full_name: string; role: Role; created_at: string
 }
@@ -28,7 +32,7 @@ type AdminData = { sites: Site[]; receivers: Receiver[]; routes: { site_id: stri
 type RouteKey = string   // `${siteId}:${receiverId}`
 
 // ── Helpers ───────────────────────────────────────────────────────
-const TAB_IDS = ['matrix', 'sites', 'receivers', 'users'] as const
+const TAB_IDS = ['matrix', 'sites', 'receivers', 'cameras', 'users'] as const
 type Tab = typeof TAB_IDS[number]
 
 const SITE_TYPE_ICON = { train: Train, mine: HardHat, other: Radio }
@@ -127,6 +131,7 @@ export default function Admin() {
     { id: 'matrix',    label: 'Routing Matrix', icon: GitBranch },
     { id: 'sites',     label: 'Sites',          icon: Train      },
     { id: 'receivers', label: 'HQ Receivers',   icon: Radio      },
+    { id: 'cameras',   label: 'Cameras',         icon: Camera     },
     ...(isAdmin ? [{ id: 'users', label: 'Users', icon: Users }] : []),
   ] as const
 
@@ -178,6 +183,7 @@ export default function Admin() {
       {tab === 'matrix'    && <RoutingMatrix sites={sites} receivers={receivers} activeRoutes={activeRoutes} busyCells={busyCells} onToggle={toggleRoute} />}
       {tab === 'sites'     && <SitesPanel    sites={sites}     onRefresh={load} isAdmin={isAdmin} />}
       {tab === 'receivers' && <ReceiversPanel receivers={receivers} onRefresh={load} isAdmin={isAdmin} />}
+      {tab === 'cameras'   && <CamerasPanel  sites={sites} isAdmin={isAdmin} />}
       {tab === 'users'     && isAdmin && <UsersPanel currentUserId={user!.id} />}
     </div>
   )
@@ -186,6 +192,12 @@ export default function Admin() {
 function CountBadge({ n }: { n: number }) {
   return (
     <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">{n}</span>
+  )
+}
+
+function CameraTabBadge() {
+  return (
+    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">CAM</span>
   )
 }
 
@@ -691,6 +703,159 @@ function AdminResetPasswordDialog({ userId, userName, onClose }: {
         )}
       </DialogContent>
     </Dialog>
+  )
+}
+
+// ── Cameras Panel ──────────────────────────────────────────────────
+function CamerasPanel({ sites, isAdmin }: { sites: Site[]; isAdmin: boolean }) {
+  const [cameras, setCameras]   = useState<CameraRow[]>([])
+  const [loading, setLoading]   = useState(true)
+  const [deleting, setDeleting] = useState<number | null>(null)
+  const [saving, setSaving]     = useState(false)
+  const [formErr, setFormErr]   = useState('')
+  const [form, setForm] = useState({
+    site_id: '', label: 'Camera', ip: '', port: '554',
+    username: '', password: '', channel: '1', subtype: '0',
+  })
+
+  const loadCameras = async () => {
+    setLoading(true)
+    try {
+      const rows = await api.get<CameraRow[]>('/api/cameras/all')
+      setCameras(rows)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { loadCameras() }, [])
+
+  const addCamera = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setFormErr('')
+    setSaving(true)
+    try {
+      await api.post('/api/cameras', {
+        site_id:  form.site_id,
+        label:    form.label,
+        ip:       form.ip,
+        port:     parseInt(form.port) || 554,
+        username: form.username,
+        password: form.password,
+        channel:  parseInt(form.channel) || 1,
+        subtype:  parseInt(form.subtype) || 0,
+      })
+      setForm({ site_id: form.site_id, label: 'Camera', ip: '', port: '554', username: '', password: '', channel: '1', subtype: '0' })
+      await loadCameras()
+    } catch (err) {
+      setFormErr(err instanceof Error ? err.message : 'Failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const del = async (id: number) => {
+    setDeleting(id)
+    try { await api.delete(`/api/cameras/${id}`); await loadCameras() }
+    catch { /* ignore */ }
+    finally { setDeleting(null) }
+  }
+
+  return (
+    <div className="space-y-5">
+      {isAdmin && (
+        <div className="rounded-lg border border-border bg-card p-4">
+          <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
+            <Plus className="h-4 w-4 text-primary" /> Add Camera
+          </h3>
+          <form onSubmit={addCamera} className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Site</label>
+              <select
+                value={form.site_id}
+                onChange={e => setForm(f => ({ ...f, site_id: e.target.value }))}
+                required
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                <option value="" disabled>Select site…</option>
+                {sites.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+              </select>
+            </div>
+            <FormField label="Label" value={form.label} onChange={v => setForm(f => ({ ...f, label: v }))} placeholder="Camera 1" required />
+            <FormField label="IP Address" value={form.ip} onChange={v => setForm(f => ({ ...f, ip: v }))} placeholder="192.168.1.100" required mono />
+            <FormField label="Port" value={form.port} onChange={v => setForm(f => ({ ...f, port: v }))} placeholder="554" mono />
+            <FormField label="Username" value={form.username} onChange={v => setForm(f => ({ ...f, username: v }))} placeholder="admin" required />
+            <FormField label="Password" value={form.password} onChange={v => setForm(f => ({ ...f, password: v }))} type="password" placeholder="••••••••" required />
+            <FormField label="Channel" value={form.channel} onChange={v => setForm(f => ({ ...f, channel: v }))} placeholder="1" mono />
+            <FormField label="Subtype (0=main, 1=sub)" value={form.subtype} onChange={v => setForm(f => ({ ...f, subtype: v }))} placeholder="0" mono />
+            <div className="col-span-2 md:col-span-4 flex items-center gap-3">
+              <Button type="submit" size="sm" disabled={saving}>
+                {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-1.5" />}
+                Add Camera
+              </Button>
+              {formErr && <p className="text-xs text-destructive">{formErr}</p>}
+            </div>
+          </form>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="flex h-32 items-center justify-center gap-3 text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span className="text-sm">Loading cameras…</span>
+        </div>
+      ) : cameras.length === 0 ? (
+        <div className="rounded-lg border border-border py-12 text-center text-sm text-muted-foreground">
+          No cameras configured yet.
+        </div>
+      ) : (
+        <div className="rounded-lg border border-border overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/30">
+              <tr>
+                {['Site', 'Label', 'IP : Port', 'Channel', 'Stream URL'].map(h => (
+                  <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">{h}</th>
+                ))}
+                {isAdmin && <th className="px-4 py-2.5 w-10" />}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {cameras.map(cam => (
+                <tr key={cam.id} className="hover:bg-muted/20 transition-colors">
+                  <td className="px-4 py-3">
+                    <div>
+                      <p className="text-xs font-medium text-foreground">{cam.site_label}</p>
+                      <p className="text-[10px] font-mono text-muted-foreground">{cam.site_id}</p>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-foreground text-xs">{cam.label}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-foreground">{cam.ip}:{cam.port}</td>
+                  <td className="px-4 py-3 text-xs text-muted-foreground">ch{cam.channel} / sub{cam.subtype}</td>
+                  <td className="px-4 py-3">
+                    <code className="text-[10px] text-muted-foreground bg-muted/40 rounded px-1.5 py-0.5">
+                      rtsp://***@{cam.ip}:{cam.port}/…ch{cam.channel}
+                    </code>
+                  </td>
+                  {isAdmin && (
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        onClick={() => del(cam.id)}
+                        disabled={deleting === cam.id}
+                        className="text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
+                      >
+                        {deleting === cam.id
+                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          : <Trash2 className="h-3.5 w-3.5" />}
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   )
 }
 

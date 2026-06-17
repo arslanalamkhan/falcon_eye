@@ -6,12 +6,13 @@ import { useAuth } from "@/contexts/AuthContext"
 import type { Role } from "@/contexts/AuthContext"
 import {
   LayoutDashboard,
-  AlertTriangle,
   MapPin,
+  Camera,
   SlidersHorizontal,
   ChevronLeft,
   ChevronRight,
 } from "lucide-react"
+import logoSrc from "@/images/Logo.png"
 
 type NavItem = {
   icon: React.ElementType
@@ -24,8 +25,9 @@ const navItems: { group: string; items: NavItem[] }[] = [
   {
     group: "Overview",
     items: [
-      { icon: LayoutDashboard, label: "Dashboard", to: "/"    },
-      { icon: MapPin,          label: "Live Map",  to: "/map" },
+      { icon: LayoutDashboard, label: "Dashboard",    to: "/"        },
+      { icon: MapPin,          label: "Live Map",     to: "/map"     },
+      { icon: Camera,          label: "Camera Feeds", to: "/cameras" },
     ],
   },
   {
@@ -57,16 +59,12 @@ export default function Sidebar() {
       )}
     >
       {/* Logo */}
-      <div className={cn("flex items-center gap-3 px-4 py-5", collapsed && "justify-center px-0")}>
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary">
-          <AlertTriangle className="h-4 w-4 text-primary-foreground" />
-        </div>
-        {!collapsed && (
-          <div className="flex flex-col leading-none">
-            <span className="font-bold text-sm text-foreground tracking-wide">FALCON EYE</span>
-            <span className="text-[10px] text-muted-foreground uppercase tracking-widest">Alert System</span>
-          </div>
-        )}
+      <div className={cn("flex items-center justify-center px-4 py-4", collapsed && "px-2")}>
+        <img
+          src={logoSrc}
+          alt="Falcon Eye"
+          className={cn("object-contain transition-all duration-300", collapsed ? "h-8 w-8" : "h-14 w-auto")}
+        />
       </div>
 
       <Separator className="bg-sidebar-border" />

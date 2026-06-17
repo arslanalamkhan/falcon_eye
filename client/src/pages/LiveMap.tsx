@@ -1,9 +1,10 @@
 import { useEffect } from "react"
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet"
+import { useNavigate } from "react-router-dom"
 import L from "leaflet"
 import "leaflet/dist/leaflet.css"
 import { Badge } from "@/components/ui/badge"
-import { MapPin, Satellite, Clock, Gauge, Loader2 } from "lucide-react"
+import { MapPin, Satellite, Clock, Gauge, Loader2, Camera } from "lucide-react"
 import { useFirebaseData, type SiteData } from "@/hooks/useFirebaseData"
 
 // ── Custom marker icon using inline SVG / div ────────────────────
@@ -76,6 +77,7 @@ function MapAutoFit({ sites }: { sites: SiteData[] }) {
 // ── Main component ───────────────────────────────────────────────
 export default function LiveMap() {
   const { sites, activeAlertCount } = useFirebaseData()
+  const navigate = useNavigate()
 
   return (
     <div className="flex flex-col gap-4" style={{ height: "calc(100vh - 6.5rem)" }}>
@@ -181,10 +183,19 @@ export default function LiveMap() {
                         </div>
                       </div>
 
-                      {/* Site ID chip */}
-                      <p className="text-[10px] font-mono text-muted-foreground border border-border rounded px-1.5 py-0.5 inline-block">
-                        {site.id}
-                      </p>
+                      {/* Site ID chip + cameras link */}
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <p className="text-[10px] font-mono text-muted-foreground border border-border rounded px-1.5 py-0.5">
+                          {site.id}
+                        </p>
+                        <button
+                          onClick={() => navigate(`/cameras?site=${site.id}`)}
+                          className="flex items-center gap-1 text-[10px] text-primary hover:text-primary/80 transition-colors font-medium"
+                        >
+                          <Camera className="h-3 w-3" />
+                          View Cameras
+                        </button>
+                      </div>
                     </div>
                   </Popup>
                 </Marker>
@@ -239,9 +250,13 @@ export default function LiveMap() {
                         }`}>
                           GPS {site.gps?.status ?? "—"}
                         </span>
-                        <span className="text-[10px] text-muted-foreground">
-                          {timeAgo(site.gps?.updated)}
-                        </span>
+                        <button
+                          onClick={() => navigate(`/cameras?site=${site.id}`)}
+                          className="flex items-center gap-1 text-[10px] text-primary hover:text-primary/80 transition-colors"
+                        >
+                          <Camera className="h-2.5 w-2.5" />
+                          Cameras
+                        </button>
                       </div>
                     </div>
                   </div>
