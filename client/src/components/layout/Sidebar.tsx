@@ -2,6 +2,8 @@ import { useState } from "react"
 import { NavLink } from "react-router-dom"
 import { cn } from "@/lib/utils"
 import { Separator } from "@/components/ui/separator"
+import { useAuth } from "@/contexts/AuthContext"
+import type { Role } from "@/contexts/AuthContext"
 import {
   LayoutDashboard,
   AlertTriangle,
@@ -15,26 +17,37 @@ type NavItem = {
   icon: React.ElementType
   label: string
   to: string
+  allowedRoles?: Role[]
 }
 
 const navItems: { group: string; items: NavItem[] }[] = [
   {
     group: "Overview",
     items: [
-      { icon: LayoutDashboard, label: "Dashboard", to: "/"     },
-      { icon: MapPin,          label: "Live Map",  to: "/map"  },
+      { icon: LayoutDashboard, label: "Dashboard", to: "/"    },
+      { icon: MapPin,          label: "Live Map",  to: "/map" },
     ],
   },
   {
     group: "System",
     items: [
-      { icon: SlidersHorizontal, label: "Admin Panel", to: "/admin" },
+      { icon: SlidersHorizontal, label: "Admin Panel", to: "/admin", allowedRoles: ['admin', 'supervisor'] },
     ],
   },
 ]
 
 export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false)
+  const { user } = useAuth()
+
+  const visibleGroups = navItems
+    .map(group => ({
+      ...group,
+      items: group.items.filter(item =>
+        !item.allowedRoles || (user && item.allowedRoles.includes(user.role))
+      ),
+    }))
+    .filter(group => group.items.length > 0)
 
   return (
     <aside
@@ -60,7 +73,7 @@ export default function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto py-3 px-2">
-        {navItems.map((group) => (
+        {visibleGroups.map((group) => (
           <div key={group.group} className="mb-4">
             {!collapsed && (
               <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">

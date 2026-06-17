@@ -1,12 +1,16 @@
-import { Bell, Search, Wifi, WifiOff, LogOut } from "lucide-react"
+import { Bell, Search, Wifi, WifiOff, LogOut, KeyRound, Loader2, Check } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+} from "@/components/ui/dialog"
 import { useState, useEffect } from "react"
 import { useAuth } from "@/contexts/AuthContext"
 import { useNavigate } from "react-router-dom"
 import { ref, onValue } from "firebase/database"
 import { db } from "@/lib/firebase"
+import { api } from "@/lib/api"
 
 function SystemStatusPill({ online }: { online: boolean }) {
   return (
@@ -39,6 +43,7 @@ function initials(name: string) {
 export default function Topbar() {
   const [time, setTime] = useState(new Date())
   const [firebaseOnline, setFirebaseOnline] = useState(false)
+  const [changePwOpen, setChangePwOpen] = useState(false)
   const { user, logout } = useAuth()
   const navigate = useNavigate()
 
@@ -116,6 +121,16 @@ export default function Topbar() {
         <Button
           variant="ghost"
           size="icon"
+          className="h-8 w-8 text-muted-foreground hover:text-primary"
+          onClick={() => setChangePwOpen(true)}
+          title="Change password"
+        >
+          <KeyRound className="h-4 w-4" />
+        </Button>
+
+        <Button
+          variant="ghost"
+          size="icon"
           className="h-8 w-8 text-muted-foreground hover:text-destructive"
           onClick={handleLogout}
           title="Sign out"
@@ -123,6 +138,107 @@ export default function Topbar() {
           <LogOut className="h-4 w-4" />
         </Button>
       </div>
+
+      <ChangeOwnPasswordDialog
+        open={changePwOpen}
+        onClose={() => setChangePwOpen(false)}
+      />
     </header>
+  )
+}
+
+// ── Change own password dialog (requires current password) ─────────
+function ChangeOwnPasswordDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [current, setCurrent]     = useState('')
+  const [newPw, setNewPw]         = useState('')
+  const [confirm, setConfirm]     = useState('')
+  const [saving, setSaving]       = useState(false)
+  const [err, setErr]             = useState('')
+  const [success, setSuccess]     = useState(false)
+
+  function reset() {
+    setCurrent(''); setNewPw(''); setConfirm('')
+    setErr(''); setSuccess(false); setSaving(false)
+  }
+
+  function handleOpenChange(o: boolean) {
+    if (!o) { reset(); onClose() }
+  }
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (newPw !== confirm) { setErr('Passwords do not match'); return }
+    setErr('')
+    setSaving(true)
+    try {
+      await api.patch('/api/auth/password', { currentPassword: current, newPassword: newPw })
+      setSuccess(true)
+      setTimeout(() => { reset(); onClose() }, 1500)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Change Password</DialogTitle>
+          <DialogDescription>Enter your current password then choose a new one</DialogDescription>
+        </DialogHeader>
+
+        {success ? (
+          <div className="flex items-center gap-2 py-2 text-sm text-emerald-400">
+            <Check className="h-4 w-4" /> Password changed successfully
+          </div>
+        ) : (
+          <form onSubmit={submit} className="space-y-3">
+            <PasswordField label="Current Password" value={current} onChange={setCurrent} placeholder="Your current password" />
+            <PasswordField label="New Password"     value={newPw}   onChange={setNewPw}   placeholder="Min. 8 characters" />
+            <PasswordField label="Confirm New Password" value={confirm} onChange={setConfirm} placeholder="Repeat new password" />
+            {err && <p className="text-xs text-destructive">{err}</p>}
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => { reset(); onClose() }}
+                className="h-8 px-3 rounded-md border border-input text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={saving}
+                className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium flex items-center gap-1.5 hover:bg-primary/90 disabled:opacity-50 transition-colors"
+              >
+                {saving
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <KeyRound className="h-3.5 w-3.5" />}
+                Update Password
+              </button>
+            </div>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function PasswordField({ label, value, onChange, placeholder }: {
+  label: string; value: string; onChange: (v: string) => void; placeholder?: string
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">{label}</label>
+      <input
+        type="password"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        required
+        className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+      />
+    </div>
   )
 }

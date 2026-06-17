@@ -1,9 +1,11 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
 
+export type Role = 'admin' | 'supervisor' | 'operator'
+
 interface User {
   id: number
   email: string
-  role: string
+  role: Role
   full_name: string
 }
 

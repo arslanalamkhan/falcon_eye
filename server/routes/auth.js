@@ -45,6 +45,31 @@ router.post('/login', async (req, res) => {
   }
 })
 
+// PATCH /api/auth/password  (change own password — requires current password)
+router.patch('/password', require('../middleware/auth').requireAuth, async (req, res) => {
+  const { currentPassword, newPassword } = req.body
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ error: 'currentPassword and newPassword are required' })
+  }
+  if (newPassword.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' })
+  }
+  try {
+    const { rows } = await pool.query('SELECT password_hash FROM users WHERE id = $1', [req.user.id])
+    if (!rows[0]) return res.status(404).json({ error: 'User not found' })
+
+    const valid = await bcrypt.compare(currentPassword, rows[0].password_hash)
+    if (!valid) return res.status(401).json({ error: 'Current password is incorrect' })
+
+    const hash = await bcrypt.hash(newPassword, 10)
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.user.id])
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('Password change error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
 // GET /api/auth/me  (verify token + return user)
 router.get('/me', require('../middleware/auth').requireAuth, async (req, res) => {
   try {
