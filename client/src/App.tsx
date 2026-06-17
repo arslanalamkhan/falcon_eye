@@ -3,7 +3,16 @@ import { AuthProvider } from "@/contexts/AuthContext"
 import ProtectedRoute from "@/components/layout/ProtectedRoute"
 import DashboardLayout from "@/components/layout/DashboardLayout"
 import Dashboard from "@/pages/Dashboard"
+import LiveMap from "@/pages/LiveMap"
 import Login from "@/pages/Login"
+
+function ProtectedPage({ children }: { children: React.ReactNode }) {
+  return (
+    <ProtectedRoute>
+      <DashboardLayout>{children}</DashboardLayout>
+    </ProtectedRoute>
+  )
+}
 
 function App() {
   return (
@@ -11,16 +20,8 @@ function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
-          <Route
-            path="/"
-            element={
-              <ProtectedRoute>
-                <DashboardLayout>
-                  <Dashboard />
-                </DashboardLayout>
-              </ProtectedRoute>
-            }
-          />
+          <Route path="/" element={<ProtectedPage><Dashboard /></ProtectedPage>} />
+          <Route path="/map" element={<ProtectedPage><LiveMap /></ProtectedPage>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AuthProvider>

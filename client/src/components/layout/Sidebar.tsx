@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { NavLink } from "react-router-dom"
 import { cn } from "@/lib/utils"
 import { Separator } from "@/components/ui/separator"
 import {
@@ -15,35 +16,43 @@ import {
   Zap,
 } from "lucide-react"
 
-const navItems = [
+type NavItem = {
+  icon: React.ElementType
+  label: string
+  to: string
+  badge?: number
+  badgeType?: string
+}
+
+const navItems: { group: string; items: NavItem[] }[] = [
   {
     group: "Overview",
     items: [
-      { icon: LayoutDashboard, label: "Dashboard", active: true },
-      { icon: AlertTriangle, label: "Active Alerts", badge: 3, badgeType: "danger" },
-      { icon: MapPin, label: "Live Map" },
+      { icon: LayoutDashboard, label: "Dashboard",     to: "/"        },
+      { icon: AlertTriangle,   label: "Active Alerts", to: "/alerts", badge: 3, badgeType: "danger" },
+      { icon: MapPin,          label: "Live Map",      to: "/map"     },
     ],
   },
   {
     group: "Operations",
     items: [
-      { icon: Train, label: "Train Network" },
-      { icon: HardHat, label: "Mining Sites" },
-      { icon: Shield, label: "QRF Dispatch" },
-      { icon: Radio, label: "Devices" },
+      { icon: Train,    label: "Train Network", to: "/trains"  },
+      { icon: HardHat,  label: "Mining Sites",  to: "/mines"   },
+      { icon: Shield,   label: "QRF Dispatch",  to: "/qrf"     },
+      { icon: Radio,    label: "Devices",        to: "/devices" },
     ],
   },
   {
     group: "System",
     items: [
-      { icon: Zap, label: "Alert History" },
-      { icon: Settings, label: "Settings" },
+      { icon: Zap,      label: "Alert History", to: "/history"  },
+      { icon: Settings, label: "Settings",      to: "/settings" },
     ],
   },
 ]
 
 const badgeColors: Record<string, string> = {
-  danger: "bg-red-500/20 text-red-400 border border-red-500/30",
+  danger:  "bg-red-500/20 text-red-400 border border-red-500/30",
   warning: "bg-amber-500/20 text-amber-400 border border-amber-500/30",
   default: "bg-primary/20 text-primary border border-primary/30",
 }
@@ -85,15 +94,19 @@ export default function Sidebar() {
             <ul className="space-y-0.5">
               {group.items.map((item) => (
                 <li key={item.label}>
-                  <button
-                    className={cn(
-                      "w-full flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                      item.active
-                        ? "bg-sidebar-accent text-sidebar-primary"
-                        : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-                      collapsed && "justify-center px-0"
-                    )}
+                  <NavLink
+                    to={item.to}
+                    end={item.to === "/"}
                     title={collapsed ? item.label : undefined}
+                    className={({ isActive }) =>
+                      cn(
+                        "w-full flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                        isActive
+                          ? "bg-sidebar-accent text-sidebar-primary"
+                          : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                        collapsed && "justify-center px-0"
+                      )
+                    }
                   >
                     <item.icon className="h-4 w-4 shrink-0" />
                     {!collapsed && (
@@ -111,7 +124,7 @@ export default function Sidebar() {
                         )}
                       </>
                     )}
-                  </button>
+                  </NavLink>
                 </li>
               ))}
             </ul>

@@ -5,6 +5,8 @@ import { Badge } from "@/components/ui/badge"
 import { useState, useEffect } from "react"
 import { useAuth } from "@/contexts/AuthContext"
 import { useNavigate } from "react-router-dom"
+import { ref, onValue } from "firebase/database"
+import { db } from "@/lib/firebase"
 
 function SystemStatusPill({ online }: { online: boolean }) {
   return (
@@ -36,12 +38,18 @@ function initials(name: string) {
 
 export default function Topbar() {
   const [time, setTime] = useState(new Date())
+  const [firebaseOnline, setFirebaseOnline] = useState(false)
   const { user, logout } = useAuth()
   const navigate = useNavigate()
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000)
     return () => clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    const connRef = ref(db, ".info/connected")
+    return onValue(connRef, (snap) => setFirebaseOnline(snap.val() === true))
   }, [])
 
   function handleLogout() {
@@ -63,7 +71,7 @@ export default function Topbar() {
 
       {/* Center */}
       <div className="hidden md:flex items-center gap-2">
-        <SystemStatusPill online={true} />
+        <SystemStatusPill online={firebaseOnline} />
         <div className="flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground">
           <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
           <span>Live Monitoring</span>

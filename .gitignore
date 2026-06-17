@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 .env
+client/.env
+server/firebase-service-account.json
+server/*-firebase-adminsdk-*.json
 
 # Editor directories and files
 .vscode/*

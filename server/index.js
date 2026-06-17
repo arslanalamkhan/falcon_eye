@@ -3,6 +3,7 @@ const express = require('express')
 const cors = require('cors')
 
 const authRouter = require('./routes/auth')
+const { startAlertRouter } = require('./services/alertRouter')
 
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -16,4 +17,5 @@ app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
 
 app.listen(PORT, () => {
   console.log(`Falcon Eye API running on http://localhost:${PORT}`)
+  startAlertRouter()
 })
