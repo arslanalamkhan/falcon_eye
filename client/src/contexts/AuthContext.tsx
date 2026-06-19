@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
+import { api } from "@/lib/api"
 
 export type Role = 'admin' | 'supervisor' | 'operator'
 
@@ -29,10 +30,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false)
       return
     }
-    fetch("http://localhost:3001/api/auth/me", {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((r) => (r.ok ? r.json() : Promise.reject()))
+    api.get<{ user: User }>('/api/auth/me')
       .then(({ user }) => setUser(user))
       .catch(() => {
         localStorage.removeItem("fe_token")
@@ -42,13 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [token])
 
   async function login(email: string, password: string) {
-    const res = await fetch("http://localhost:3001/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    })
-    const data = await res.json()
-    if (!res.ok) throw new Error(data.error ?? "Login failed")
+    const data = await api.post<{ token: string; user: User }>('/api/auth/login', { email, password })
     localStorage.setItem("fe_token", data.token)
     setToken(data.token)
     setUser(data.user)
