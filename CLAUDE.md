@@ -76,8 +76,7 @@ falcon_eye/
 │   │   └── routingSync.js         # Syncs PostgreSQL routing table → Firebase routing/ node
 │   └── scripts/
 │       ├── setup-db.js            # One-time DB bootstrap + admin user seed
-│       ├── 002_routing_schema.js  # Adds sites, hq_receivers, site_receiver_routes tables
-│       └── seed-firebase.js       # Populates Firebase with test sites, receivers, logs
+│       └── 002_routing_schema.js  # Adds sites, hq_receivers, site_receiver_routes tables
 │
 ├── .env                           # DB URL, JWT secret, PORT, Firebase DB URL (never commit)
 ├── .gitignore                     # Includes client/.env, server/*-firebase-adminsdk-*.json
@@ -97,9 +96,6 @@ cd client && npm install
 # ── Database setup ─────────────────────────────────────────────────
 node server/scripts/setup-db.js          # Create DB + seed admin user (run once)
 node server/scripts/002_routing_schema.js # Add routing tables + seed data (run once)
-
-# ── Firebase test data ─────────────────────────────────────────────
-node server/scripts/seed-firebase.js     # Populate Firebase with 5 sites, 4 receivers, 30 log entries
 
 # ── Start servers (two separate terminals) ─────────────────────────
 node server/index.js                     # API + alertRouter on port 3001
