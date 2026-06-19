@@ -13,11 +13,14 @@ type CameraRow = {
   id: number
   site_id: string
   label: string
-  ip: string
+  ip: string | null
   port: number
   channel: number
   subtype: number
   active: boolean
+  stream_type: string
+  imou_device_id: string | null
+  imou_channel_id: string
 }
 
 export default function Cameras() {
@@ -183,9 +186,14 @@ export default function Cameras() {
                 <div className="px-3 py-2 border-t border-border bg-muted/20 flex items-center justify-between">
                   <div className="min-w-0">
                     <p className="text-xs font-medium text-foreground truncate">{cam.label}</p>
-                    <p className="text-[10px] font-mono text-muted-foreground">{cam.ip}:{cam.port} — ch{cam.channel}</p>
+                    {cam.stream_type === 'imou'
+                      ? <p className="text-[10px] font-mono text-muted-foreground">Device: {cam.imou_device_id} — ch{cam.imou_channel_id}</p>
+                      : <p className="text-[10px] font-mono text-muted-foreground">{cam.ip}:{cam.port} — ch{cam.channel}</p>
+                    }
                   </div>
-                  <Badge variant="info" className="text-[10px] shrink-0 ml-2">RTSP</Badge>
+                  <Badge variant={cam.stream_type === 'imou' ? 'success' : 'info'} className="text-[10px] shrink-0 ml-2">
+                    {cam.stream_type === 'imou' ? 'IMOU CLOUD' : 'RTSP'}
+                  </Badge>
                 </div>
               </div>
             ))}

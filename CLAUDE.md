@@ -96,6 +96,8 @@ cd client && npm install
 # ── Database setup ─────────────────────────────────────────────────
 node server/scripts/setup-db.js          # Create DB + seed admin user (run once)
 node server/scripts/002_routing_schema.js # Add routing tables + seed data (run once)
+node server/scripts/003_cameras_schema.js # Add cameras table (run once)
+node server/scripts/004_imou_schema.js    # Add IMOU columns to cameras (run once)
 
 # ── Start servers (two separate terminals) ─────────────────────────
 node server/index.js                     # API + alertRouter on port 3001
@@ -117,10 +119,17 @@ DATABASE_URL=postgresql://postgres:<password>@localhost:5432/falcon_eye
 JWT_SECRET=<strong-random-secret>
 PORT=3001
 FIREBASE_DATABASE_URL=https://falcon-eye-c03a4-default-rtdb.firebaseio.com
+CORS_ORIGIN=http://localhost:5173   # change to production frontend URL on deploy
+
+# IMOU Cloud API (required only if using IMOU cameras)
+IMOU_APP_ID=<from IMOU Open Platform console>
+IMOU_APP_SECRET=<from IMOU Open Platform console>
+IMOU_API_BASE_URL=https://openapi.easy4ip.com/openapi   # default; or openapi.lechange.cn for China accounts
 ```
 
 ### `client/.env` (Vite — must use `VITE_` prefix)
 ```
+VITE_API_URL=http://localhost:3001   # change to production backend URL on deploy
 VITE_FIREBASE_API_KEY=...
 VITE_FIREBASE_AUTH_DOMAIN=falcon-eye-c03a4.firebaseapp.com
 VITE_FIREBASE_DATABASE_URL=https://falcon-eye-c03a4-default-rtdb.firebaseio.com
@@ -225,18 +234,23 @@ receiver_id TEXT NOT NULL REFERENCES hq_receivers(id) ON DELETE CASCADE
 PRIMARY KEY (site_id, receiver_id)
 created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 
--- cameras (RTSP cameras attached to sites — added by 003_cameras_schema.js)
-id         SERIAL PRIMARY KEY
-site_id    TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE
-label      TEXT NOT NULL DEFAULT 'Camera'
-ip         TEXT NOT NULL
-port       INTEGER NOT NULL DEFAULT 554
-username   TEXT NOT NULL
-password   TEXT NOT NULL                     -- stored plain-text; never returned in API responses
-channel    INTEGER NOT NULL DEFAULT 1
-subtype    INTEGER NOT NULL DEFAULT 0        -- 0 = main stream, 1 = sub stream
-active     BOOLEAN NOT NULL DEFAULT true
-created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-- cameras (IP cameras attached to sites — 003_cameras_schema.js + 004_imou_schema.js)
+id              SERIAL PRIMARY KEY
+site_id         TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE
+label           TEXT NOT NULL DEFAULT 'Camera'
+stream_type     TEXT NOT NULL DEFAULT 'rtsp'    -- 'rtsp' | 'imou'
+-- RTSP fields (nullable for IMOU cameras)
+ip              TEXT                            -- null for IMOU cameras
+port            INTEGER NOT NULL DEFAULT 554
+username        TEXT                            -- null for IMOU cameras
+password        TEXT                            -- null for IMOU cameras; never returned in API
+channel         INTEGER NOT NULL DEFAULT 1
+subtype         INTEGER NOT NULL DEFAULT 0      -- 0 = main stream, 1 = sub stream
+-- IMOU Cloud fields (null for RTSP cameras)
+imou_device_id  TEXT                            -- IMOU device serial number
+imou_channel_id TEXT NOT NULL DEFAULT '0'       -- IMOU channel within the device
+active          BOOLEAN NOT NULL DEFAULT true
+created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 ```
 
 ---
@@ -419,6 +433,34 @@ Shadcn UI pattern — components are owned code in `src/components/ui/`, not a b
 - **JWT over sessions** — stateless auth suits the multi-device operator scenario
 - **CommonJS for server** — do not convert server files to ESM without updating root `package.json`
 - **Routing sync is bidirectional in one direction** — DB is master, Firebase is replica; always update DB first then call `syncRoutingToFirebase()`
+
+---
+
+## IMOU Cloud Camera Integration
+
+IMOU cameras can stream via IMOU's cloud instead of direct RTSP, removing the need for FFmpeg on the server.
+
+### How it works
+1. Register a developer account at [open.imoulife.com](https://open.imoulife.com) → create an App → get `appId` + `appSecret`
+2. Add `IMOU_APP_ID`, `IMOU_APP_SECRET`, `IMOU_API_BASE_URL` to root `.env`
+3. Run migration `004_imou_schema.js` to add IMOU columns to the cameras table
+4. In Admin → Cameras → Add Camera, select **IMOU Cloud** as the stream type and enter the device's serial number (e.g. `AABHD12345678901`)
+5. The Cameras page fetches an HLS URL from IMOU's cloud on demand — no FFmpeg, no local transcoding
+
+### IMOU API flow (`server/services/imouService.js`)
+- **`accessToken`** — fetched once, cached in memory with TTL (default 24h)
+- **`bindDeviceLive`** — binds a device serial + channel to get a `streamId` (cached per camera per server session)
+- **`getLiveStreamInfo`** — returns the live HLS URL; called on every stream start and status heartbeat
+- **`deleteDeviceLive`** — called when the stream is stopped to release the binding on IMOU's side
+- Signature: `MD5("time=<unix>&appSecret=<secret>&nonce=<hex>")`
+
+### Limitations (IMOU developer tier)
+- Max **5 devices** per developer account — contact IMOU for commercial tier if more cameras are needed
+- 30,000 free API calls/month; $0.02 per 10,000 over the limit
+- Camera must have internet access — RTSP is the only option for air-gapped/remote sites
+
+### Data center selection
+Default endpoint is `openapi.easy4ip.com` (works globally for most accounts). China-registered accounts may need `openapi.lechange.cn:443`. Override via `IMOU_API_BASE_URL` in `.env`.
 
 ---
 

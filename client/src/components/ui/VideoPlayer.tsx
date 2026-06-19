@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react"
 import Hls from "hls.js"
-import { api } from "@/lib/api"
+import { api, BASE } from "@/lib/api"
 import { Loader2, VideoOff, RefreshCw } from "lucide-react"
 
 type Phase = "idle" | "starting" | "playing" | "error"
@@ -10,8 +10,12 @@ type Props = {
   label: string
 }
 
-const BASE = "http://localhost:3001"
 const HEARTBEAT_INTERVAL = 25_000
+
+// IMOU HLS URLs are absolute; RTSP HLS paths are server-relative
+function resolveUrl(url: string) {
+  return url.startsWith('http') ? url : `${BASE}${url}`
+}
 
 export default function VideoPlayer({ cameraId, label }: Props) {
   const videoRef  = useRef<HTMLVideoElement>(null)
@@ -42,7 +46,7 @@ export default function VideoPlayer({ cameraId, label }: Props) {
         backBufferLength: 0,
       })
       hlsRef.current = hls
-      hls.loadSource(`${BASE}${hlsUrl}`)
+      hls.loadSource(resolveUrl(hlsUrl))
       hls.attachMedia(video)
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         video.play().catch(() => {})
@@ -57,7 +61,7 @@ export default function VideoPlayer({ cameraId, label }: Props) {
       })
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
       // Safari native HLS
-      video.src = `${BASE}${hlsUrl}`
+      video.src = resolveUrl(hlsUrl)
       video.play().catch(() => {})
       setPhase("playing")
     } else {
