@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom"
 import { useAuth } from "@/contexts/AuthContext"
 import {
   AlertTriangle, Eye, EyeOff, Lock, Mail, Shield,
-  Satellite, Radio, MapPin, Camera,
+  Satellite, Radio, Camera,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"

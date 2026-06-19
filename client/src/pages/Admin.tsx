@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogClose,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from "@/components/ui/dialog"
 import {
   GitBranch, Train, HardHat, Radio, Plus, Trash2, Camera,
@@ -196,11 +196,6 @@ function CountBadge({ n }: { n: number }) {
   )
 }
 
-function CameraTabBadge() {
-  return (
-    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">CAM</span>
-  )
-}
 
 // ── Routing Matrix ─────────────────────────────────────────────────
 function RoutingMatrix({ sites, receivers, activeRoutes, busyCells, onToggle }: {
