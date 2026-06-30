@@ -18,8 +18,7 @@ const PORT = process.env.PORT || 3001
 const STREAMS_DIR = path.join(__dirname, 'streams')
 if (!fs.existsSync(STREAMS_DIR)) fs.mkdirSync(STREAMS_DIR, { recursive: true })
 
-const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:5173'
-app.use(cors({ origin: CORS_ORIGIN, credentials: true }))
+app.use(cors())
 app.use(express.json())
 
 // Serve HLS segments — no auth needed (segments are ephemeral, URL is unguessable in prod)
