@@ -33,7 +33,7 @@ const navItems: { group: string; items: NavItem[] }[] = [
   {
     group: "System",
     items: [
-      { icon: SlidersHorizontal, label: "Admin Panel", to: "/admin", allowedRoles: ['admin', 'supervisor'] },
+      { icon: SlidersHorizontal, label: "Admin Panel", to: "/admin" },
     ],
   },
 ]

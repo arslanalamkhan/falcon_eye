@@ -9,21 +9,24 @@ import {
 } from "@/components/ui/dialog"
 import {
   GitBranch, Train, HardHat, Radio, Plus, Trash2, Camera,
-  Loader2, Check, X, RefreshCw, AlertCircle, Users, ShieldCheck, KeyRound,
+  Loader2, Check, X, RefreshCw, AlertCircle, Users, ShieldCheck, KeyRound, Eye,
 } from "lucide-react"
 import type { Role } from "@/contexts/AuthContext"
 
 // ── Types ─────────────────────────────────────────────────────────
 type Site = {
   id: string; label: string; type: string; region: string; active: boolean
+  owner_id: number | null; owner_name: string | null
 }
 type Receiver = {
   id: string; label: string; lea: string; city: string; active: boolean
+  owner_id: number | null; owner_name: string | null
 }
 type CameraRow = {
   id: number; site_id: string; label: string; ip: string | null; port: number
   channel: number; subtype: number; active: boolean; site_label: string; site_type: string
   stream_type: string; imou_device_id: string | null; imou_channel_id: string
+  site_owner_id: number | null
 }
 type UserRow = {
   id: number; email: string; full_name: string; role: Role; created_at: string
@@ -181,10 +184,10 @@ export default function Admin() {
       </div>
 
       {/* Tab content */}
-      {tab === 'matrix'    && <RoutingMatrix sites={sites} receivers={receivers} activeRoutes={activeRoutes} busyCells={busyCells} onToggle={toggleRoute} />}
-      {tab === 'sites'     && <SitesPanel    sites={sites}     onRefresh={load} isAdmin={isAdmin} />}
-      {tab === 'receivers' && <ReceiversPanel receivers={receivers} onRefresh={load} isAdmin={isAdmin} />}
-      {tab === 'cameras'   && <CamerasPanel  sites={sites} isAdmin={isAdmin} />}
+      {tab === 'matrix'    && <RoutingMatrix sites={sites} receivers={receivers} activeRoutes={activeRoutes} busyCells={busyCells} onToggle={toggleRoute} isAdmin={isAdmin} currentUserId={user!.id} />}
+      {tab === 'sites'     && <SitesPanel    sites={sites}     onRefresh={load} isAdmin={isAdmin} currentUserId={user!.id} />}
+      {tab === 'receivers' && <ReceiversPanel receivers={receivers} onRefresh={load} isAdmin={isAdmin} currentUserId={user!.id} />}
+      {tab === 'cameras'   && <CamerasPanel  sites={sites} isAdmin={isAdmin} currentUserId={user!.id} />}
       {tab === 'users'     && isAdmin && <UsersPanel currentUserId={user!.id} />}
     </div>
   )
@@ -198,10 +201,11 @@ function CountBadge({ n }: { n: number }) {
 
 
 // ── Routing Matrix ─────────────────────────────────────────────────
-function RoutingMatrix({ sites, receivers, activeRoutes, busyCells, onToggle }: {
+function RoutingMatrix({ sites, receivers, activeRoutes, busyCells, onToggle, isAdmin, currentUserId }: {
   sites: Site[]; receivers: Receiver[]
   activeRoutes: Set<RouteKey>; busyCells: Set<RouteKey>
   onToggle: (siteId: string, receiverId: string) => void
+  isAdmin: boolean; currentUserId: number
 }) {
   const activeCount = activeRoutes.size
 
@@ -232,7 +236,9 @@ function RoutingMatrix({ sites, receivers, activeRoutes, busyCells, onToggle }: 
           </thead>
 
           <tbody className="divide-y divide-border">
-            {sites.map((site, i) => (
+            {sites.map((site, i) => {
+              const canEdit = isAdmin || site.owner_id === currentUserId
+              return (
               <tr key={site.id} className={i % 2 === 0 ? '' : 'bg-muted/10'}>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
@@ -252,14 +258,15 @@ function RoutingMatrix({ sites, receivers, activeRoutes, busyCells, onToggle }: 
                     <td key={r.id} className="px-3 py-3 text-center">
                       <button
                         onClick={() => onToggle(site.id, r.id)}
-                        disabled={busy}
-                        title={enabled ? 'Click to disable route' : 'Click to enable route'}
+                        disabled={busy || !canEdit}
+                        title={!canEdit ? 'Only the site owner or an admin can edit routing' : enabled ? 'Click to disable route' : 'Click to enable route'}
                         className={cn(
                           "mx-auto flex h-8 w-8 items-center justify-center rounded-full border-2 transition-all",
                           enabled
                             ? "border-emerald-500 bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25"
                             : "border-border bg-transparent text-muted-foreground/40 hover:border-muted-foreground hover:text-muted-foreground",
-                          busy && "opacity-60 cursor-wait"
+                          busy && "opacity-60 cursor-wait",
+                          !canEdit && "opacity-40 cursor-not-allowed"
                         )}
                       >
                         {busy
@@ -273,7 +280,8 @@ function RoutingMatrix({ sites, receivers, activeRoutes, busyCells, onToggle }: 
                   )
                 })}
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
       </div>
@@ -282,11 +290,14 @@ function RoutingMatrix({ sites, receivers, activeRoutes, busyCells, onToggle }: 
 }
 
 // ── Sites Panel ────────────────────────────────────────────────────
-function SitesPanel({ sites, onRefresh, isAdmin }: { sites: Site[]; onRefresh: () => void; isAdmin: boolean }) {
+function SitesPanel({ sites, onRefresh, isAdmin, currentUserId }: {
+  sites: Site[]; onRefresh: () => void; isAdmin: boolean; currentUserId: number
+}) {
   const [form, setForm] = useState({ id: '', label: '', type: 'train', region: '' })
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [formErr, setFormErr] = useState('')
+  const [visTarget, setVisTarget] = useState<{ id: string; label: string } | null>(null)
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -312,40 +323,38 @@ function SitesPanel({ sites, onRefresh, isAdmin }: { sites: Site[]; onRefresh: (
 
   return (
     <div className="space-y-5">
-      {isAdmin && (
-        <div className="rounded-lg border border-border bg-card p-4">
-          <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
-            <Plus className="h-4 w-4 text-primary" /> Add Site
-          </h3>
-          <form onSubmit={submit} className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <FormField label="Site ID" value={form.id} onChange={v => setForm(f => ({ ...f, id: v }))} placeholder="khyber_express" required mono />
-            <FormField label="Label" value={form.label} onChange={v => setForm(f => ({ ...f, label: v }))} placeholder="Khyber Express" required />
-            <div className="flex flex-col gap-1">
-              <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Type</label>
-              <select
-                value={form.type}
-                onChange={e => setForm(f => ({ ...f, type: e.target.value }))}
-                className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              >
-                <option value="train">Train</option>
-                <option value="mine">Mining Site</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
-            <FormField label="Region" value={form.region} onChange={v => setForm(f => ({ ...f, region: v }))} placeholder="KP/Punjab" />
-            <div className="col-span-2 md:col-span-4 flex items-center gap-3">
-              <Button type="submit" size="sm" disabled={saving}>
-                {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-1.5" />}
-                Add Site
-              </Button>
-              {formErr && <p className="text-xs text-destructive">{formErr}</p>}
-            </div>
-          </form>
-        </div>
-      )}
+      <div className="rounded-lg border border-border bg-card p-4">
+        <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
+          <Plus className="h-4 w-4 text-primary" /> Add Site
+        </h3>
+        <form onSubmit={submit} className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <FormField label="Site ID" value={form.id} onChange={v => setForm(f => ({ ...f, id: v }))} placeholder="khyber_express" required mono />
+          <FormField label="Label" value={form.label} onChange={v => setForm(f => ({ ...f, label: v }))} placeholder="Khyber Express" required />
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Type</label>
+            <select
+              value={form.type}
+              onChange={e => setForm(f => ({ ...f, type: e.target.value }))}
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            >
+              <option value="train">Train</option>
+              <option value="mine">Mining Site</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <FormField label="Region" value={form.region} onChange={v => setForm(f => ({ ...f, region: v }))} placeholder="KP/Punjab" />
+          <div className="col-span-2 md:col-span-4 flex items-center gap-3">
+            <Button type="submit" size="sm" disabled={saving}>
+              {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-1.5" />}
+              Add Site
+            </Button>
+            {formErr && <p className="text-xs text-destructive">{formErr}</p>}
+          </div>
+        </form>
+      </div>
 
       <EntityTable
-        columns={['Site ID', 'Label', 'Type', 'Region']}
+        columns={['Site ID', 'Label', 'Type', 'Region', 'Owner']}
         rows={sites.map(s => ({
           key: s.id,
           cells: [
@@ -353,21 +362,37 @@ function SitesPanel({ sites, onRefresh, isAdmin }: { sites: Site[]; onRefresh: (
             s.label,
             <Badge variant={s.type === 'train' ? 'info' : 'warning'} className="text-[10px]">{s.type}</Badge>,
             s.region || '—',
+            s.owner_id === currentUserId ? 'You' : (s.owner_name || '—'),
           ],
         }))}
-        onDelete={isAdmin ? del : undefined}
+        onDelete={del}
         deletingId={deleting}
+        canDelete={(id) => {
+          const s = sites.find(x => x.id === id)
+          return isAdmin || s?.owner_id === currentUserId
+        }}
+        extraAction={isAdmin ? (id) => {
+          const s = sites.find(x => x.id === id)
+          if (s) setVisTarget({ id: s.id, label: s.label })
+        } : undefined}
       />
+
+      {visTarget && (
+        <VisibilityDialog kind="sites" id={visTarget.id} label={visTarget.label} onClose={() => setVisTarget(null)} />
+      )}
     </div>
   )
 }
 
 // ── Receivers Panel ────────────────────────────────────────────────
-function ReceiversPanel({ receivers, onRefresh, isAdmin }: { receivers: Receiver[]; onRefresh: () => void; isAdmin: boolean }) {
+function ReceiversPanel({ receivers, onRefresh, isAdmin, currentUserId }: {
+  receivers: Receiver[]; onRefresh: () => void; isAdmin: boolean; currentUserId: number
+}) {
   const [form, setForm] = useState({ id: '', label: '', lea: '', city: '' })
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [formErr, setFormErr] = useState('')
+  const [visTarget, setVisTarget] = useState<{ id: string; label: string } | null>(null)
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -393,29 +418,27 @@ function ReceiversPanel({ receivers, onRefresh, isAdmin }: { receivers: Receiver
 
   return (
     <div className="space-y-5">
-      {isAdmin && (
-        <div className="rounded-lg border border-border bg-card p-4">
-          <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
-            <Plus className="h-4 w-4 text-primary" /> Add HQ Receiver
-          </h3>
-          <form onSubmit={submit} className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <FormField label="Receiver ID" value={form.id} onChange={v => setForm(f => ({ ...f, id: v }))} placeholder="isi_rawalpindi" required mono />
-            <FormField label="Label" value={form.label} onChange={v => setForm(f => ({ ...f, label: v }))} placeholder="ISI HQ Rawalpindi" required />
-            <FormField label="LEA / Agency" value={form.lea} onChange={v => setForm(f => ({ ...f, lea: v }))} placeholder="ISI" />
-            <FormField label="City" value={form.city} onChange={v => setForm(f => ({ ...f, city: v }))} placeholder="Rawalpindi" />
-            <div className="col-span-2 md:col-span-4 flex items-center gap-3">
-              <Button type="submit" size="sm" disabled={saving}>
-                {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-1.5" />}
-                Add Receiver
-              </Button>
-              {formErr && <p className="text-xs text-destructive">{formErr}</p>}
-            </div>
-          </form>
-        </div>
-      )}
+      <div className="rounded-lg border border-border bg-card p-4">
+        <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
+          <Plus className="h-4 w-4 text-primary" /> Add HQ Receiver
+        </h3>
+        <form onSubmit={submit} className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <FormField label="Receiver ID" value={form.id} onChange={v => setForm(f => ({ ...f, id: v }))} placeholder="isi_rawalpindi" required mono />
+          <FormField label="Label" value={form.label} onChange={v => setForm(f => ({ ...f, label: v }))} placeholder="ISI HQ Rawalpindi" required />
+          <FormField label="LEA / Agency" value={form.lea} onChange={v => setForm(f => ({ ...f, lea: v }))} placeholder="ISI" />
+          <FormField label="City" value={form.city} onChange={v => setForm(f => ({ ...f, city: v }))} placeholder="Rawalpindi" />
+          <div className="col-span-2 md:col-span-4 flex items-center gap-3">
+            <Button type="submit" size="sm" disabled={saving}>
+              {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-1.5" />}
+              Add Receiver
+            </Button>
+            {formErr && <p className="text-xs text-destructive">{formErr}</p>}
+          </div>
+        </form>
+      </div>
 
       <EntityTable
-        columns={['Receiver ID', 'Label', 'LEA', 'City']}
+        columns={['Receiver ID', 'Label', 'LEA', 'City', 'Owner']}
         rows={receivers.map(r => ({
           key: r.id,
           cells: [
@@ -423,11 +446,24 @@ function ReceiversPanel({ receivers, onRefresh, isAdmin }: { receivers: Receiver
             r.label,
             r.lea  || '—',
             r.city || '—',
+            r.owner_id === currentUserId ? 'You' : (r.owner_name || '—'),
           ],
         }))}
-        onDelete={isAdmin ? del : undefined}
+        onDelete={del}
         deletingId={deleting}
+        canDelete={(id) => {
+          const r = receivers.find(x => x.id === id)
+          return isAdmin || r?.owner_id === currentUserId
+        }}
+        extraAction={isAdmin ? (id) => {
+          const r = receivers.find(x => x.id === id)
+          if (r) setVisTarget({ id: r.id, label: r.label })
+        } : undefined}
       />
+
+      {visTarget && (
+        <VisibilityDialog kind="receivers" id={visTarget.id} label={visTarget.label} onClose={() => setVisTarget(null)} />
+      )}
     </div>
   )
 }
@@ -703,7 +739,8 @@ function AdminResetPasswordDialog({ userId, userName, onClose }: {
 }
 
 // ── Cameras Panel ──────────────────────────────────────────────────
-function CamerasPanel({ sites, isAdmin }: { sites: Site[]; isAdmin: boolean }) {
+function CamerasPanel({ sites, isAdmin, currentUserId }: { sites: Site[]; isAdmin: boolean; currentUserId: number }) {
+  const manageableSites = sites.filter(s => isAdmin || s.owner_id === currentUserId)
   const [cameras, setCameras]   = useState<CameraRow[]>([])
   const [loading, setLoading]   = useState(true)
   const [deleting, setDeleting] = useState<number | null>(null)
@@ -768,7 +805,11 @@ function CamerasPanel({ sites, isAdmin }: { sites: Site[]; isAdmin: boolean }) {
 
   return (
     <div className="space-y-5">
-      {isAdmin && (
+      {manageableSites.length === 0 ? (
+        <div className="rounded-lg border border-border bg-card p-4 text-xs text-muted-foreground">
+          Add a site you own before attaching a camera to it.
+        </div>
+      ) : (
         <div className="rounded-lg border border-border bg-card p-4">
           <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
             <Plus className="h-4 w-4 text-primary" /> Add Camera
@@ -785,7 +826,7 @@ function CamerasPanel({ sites, isAdmin }: { sites: Site[]; isAdmin: boolean }) {
                   className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                 >
                   <option value="" disabled>Select site…</option>
-                  {sites.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                  {manageableSites.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
                 </select>
               </div>
               <FormField label="Label" value={form.label} onChange={v => setForm(f => ({ ...f, label: v }))} placeholder="Camera 1" required />
@@ -859,11 +900,13 @@ function CamerasPanel({ sites, isAdmin }: { sites: Site[]; isAdmin: boolean }) {
                 {['Site', 'Label', 'Type', 'Connection', 'Channel'].map(h => (
                   <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">{h}</th>
                 ))}
-                {isAdmin && <th className="px-4 py-2.5 w-10" />}
+                <th className="px-4 py-2.5 w-10" />
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {cameras.map(cam => (
+              {cameras.map(cam => {
+                const canDelete = isAdmin || cam.site_owner_id === currentUserId
+                return (
                 <tr key={cam.id} className="hover:bg-muted/20 transition-colors">
                   <td className="px-4 py-3">
                     <div>
@@ -889,8 +932,8 @@ function CamerasPanel({ sites, isAdmin }: { sites: Site[]; isAdmin: boolean }) {
                       : `ch${cam.channel} / sub${cam.subtype}`
                     }
                   </td>
-                  {isAdmin && (
-                    <td className="px-4 py-3 text-right">
+                  <td className="px-4 py-3 text-right">
+                    {canDelete && (
                       <button
                         onClick={() => del(cam.id)}
                         disabled={deleting === cam.id}
@@ -900,10 +943,11 @@ function CamerasPanel({ sites, isAdmin }: { sites: Site[]; isAdmin: boolean }) {
                           ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                           : <Trash2 className="h-3.5 w-3.5" />}
                       </button>
-                    </td>
-                  )}
+                    )}
+                  </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -935,17 +979,20 @@ function FormField({ label, value, onChange, placeholder, required, mono, type =
   )
 }
 
-function EntityTable({ columns, rows, onDelete, deletingId }: {
+function EntityTable({ columns, rows, onDelete, deletingId, canDelete, extraAction }: {
   columns: string[]
   rows: { key: string; cells: React.ReactNode[] }[]
   onDelete?: (id: string) => void
   deletingId: string | null
+  canDelete?: (id: string) => boolean
+  extraAction?: (id: string) => void
 }) {
   if (rows.length === 0) return (
     <div className="rounded-lg border border-border py-12 text-center text-sm text-muted-foreground">
       No entries yet.
     </div>
   )
+  const hasActionsCol = !!onDelete || !!extraAction
   return (
     <div className="rounded-lg border border-border overflow-hidden">
       <table className="w-full text-sm">
@@ -954,7 +1001,7 @@ function EntityTable({ columns, rows, onDelete, deletingId }: {
             {columns.map(c => (
               <th key={c} className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">{c}</th>
             ))}
-            {onDelete && <th className="px-4 py-2.5 w-10" />}
+            {hasActionsCol && <th className="px-4 py-2.5 w-16" />}
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
@@ -963,17 +1010,30 @@ function EntityTable({ columns, rows, onDelete, deletingId }: {
               {cells.map((cell, i) => (
                 <td key={i} className="px-4 py-3 text-foreground">{cell}</td>
               ))}
-              {onDelete && (
+              {hasActionsCol && (
                 <td className="px-4 py-3 text-right">
-                  <button
-                    onClick={() => onDelete(key)}
-                    disabled={deletingId === key}
-                    className="text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
-                  >
-                    {deletingId === key
-                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      : <Trash2 className="h-3.5 w-3.5" />}
-                  </button>
+                  <div className="flex items-center justify-end gap-2">
+                    {extraAction && (
+                      <button
+                        onClick={() => extraAction(key)}
+                        className="text-muted-foreground hover:text-primary transition-colors"
+                        title="Manage visibility"
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    {onDelete && (!canDelete || canDelete(key)) && (
+                      <button
+                        onClick={() => onDelete(key)}
+                        disabled={deletingId === key}
+                        className="text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
+                      >
+                        {deletingId === key
+                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          : <Trash2 className="h-3.5 w-3.5" />}
+                      </button>
+                    )}
+                  </div>
                 </td>
               )}
             </tr>
@@ -981,5 +1041,90 @@ function EntityTable({ columns, rows, onDelete, deletingId }: {
         </tbody>
       </table>
     </div>
+  )
+}
+
+// ── Visibility grant dialog (admin only) ────────────────────────────
+function VisibilityDialog({ kind, id, label, onClose }: {
+  kind: 'sites' | 'receivers'; id: string; label: string; onClose: () => void
+}) {
+  const [allUsers, setAllUsers] = useState<UserRow[]>([])
+  const [granted, setGranted]   = useState<Set<number>>(new Set())
+  const [loading, setLoading]   = useState(true)
+  const [busy, setBusy]         = useState<number | null>(null)
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true)
+      try {
+        const [users, grants] = await Promise.all([
+          api.get<UserRow[]>('/api/admin/users'),
+          api.get<{ id: number }[]>(`/api/admin/${kind}/${id}/visibility`),
+        ])
+        setAllUsers(users)
+        setGranted(new Set(grants.map(g => g.id)))
+      } finally {
+        setLoading(false)
+      }
+    })()
+  }, [kind, id])
+
+  const toggle = async (userId: number) => {
+    const wasGranted = granted.has(userId)
+    setBusy(userId)
+    try {
+      if (wasGranted) await api.delete(`/api/admin/${kind}/${id}/visibility/${userId}`)
+      else            await api.put(`/api/admin/${kind}/${id}/visibility/${userId}`)
+      setGranted(prev => {
+        const s = new Set(prev)
+        wasGranted ? s.delete(userId) : s.add(userId)
+        return s
+      })
+    } catch { /* ignore */ }
+    finally { setBusy(null) }
+  }
+
+  return (
+    <Dialog open onOpenChange={open => { if (!open) onClose() }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Visibility</DialogTitle>
+          <DialogDescription>Choose which users can see "{label}"</DialogDescription>
+        </DialogHeader>
+
+        {loading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          </div>
+        ) : allUsers.length === 0 ? (
+          <p className="text-xs text-muted-foreground py-4">No other users yet.</p>
+        ) : (
+          <div className="max-h-72 overflow-y-auto divide-y divide-border">
+            {allUsers.map(u => (
+              <label key={u.id} className="flex items-center justify-between gap-3 py-2 px-1 text-sm cursor-pointer">
+                <div className="min-w-0">
+                  <p className="text-foreground truncate">{u.full_name}</p>
+                  <p className="text-[11px] text-muted-foreground truncate">{u.email}</p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {busy === u.id && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+                  <input
+                    type="checkbox"
+                    checked={granted.has(u.id)}
+                    disabled={busy === u.id}
+                    onChange={() => toggle(u.id)}
+                    className="h-4 w-4 accent-primary"
+                  />
+                </div>
+              </label>
+            ))}
+          </div>
+        )}
+
+        <div className="flex justify-end pt-2">
+          <Button size="sm" variant="outline" onClick={onClose}>Done</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }

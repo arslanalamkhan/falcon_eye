@@ -26,7 +26,7 @@ function App() {
           <Route path="/"         element={<ProtectedPage><Dashboard /></ProtectedPage>} />
           <Route path="/map"      element={<ProtectedPage><LiveMap /></ProtectedPage>} />
           <Route path="/cameras"  element={<ProtectedPage><Cameras /></ProtectedPage>} />
-          <Route path="/admin"    element={<ProtectedPage allowedRoles={['admin', 'supervisor']}><Admin /></ProtectedPage>} />
+          <Route path="/admin"    element={<ProtectedPage><Admin /></ProtectedPage>} />
           <Route path="*"      element={<Navigate to="/" replace />} />
         </Routes>
       </AuthProvider>

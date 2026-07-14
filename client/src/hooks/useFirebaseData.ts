@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from "react"
 import { ref, onValue, get, query, orderByKey, limitToLast } from "firebase/database"
 import { db } from "@/lib/firebase"
+import { api } from "@/lib/api"
 
 export type SiteData = {
   id: string
@@ -61,6 +62,15 @@ export function useFirebaseData() {
   const [todayAlerts, setTodayAlerts] = useState<RawAlert[]>([])
   const [pastAlerts, setPastAlerts] = useState<RawAlert[]>([])
   const [hq, setHQ] = useState<HQData | null>(null)
+  // undefined = not loaded yet, null = unrestricted (admin), array = visible site IDs
+  const [visibleSiteIds, setVisibleSiteIds] = useState<string[] | null | undefined>(undefined)
+
+  // One-time: which sites this user is allowed to see (own + admin-granted)
+  useEffect(() => {
+    api.get<{ siteIds: string[] | null }>("/api/admin/my-visibility")
+      .then((d) => setVisibleSiteIds(d.siteIds))
+      .catch(() => setVisibleSiteIds([]))
+  }, [])
 
   // Live: sites node
   useEffect(() => {
@@ -126,6 +136,18 @@ export function useFirebaseData() {
     fetchPast()
   }, [])
 
+  const isVisible = useMemo(() => {
+    if (visibleSiteIds === undefined) return () => false
+    if (visibleSiteIds === null) return () => true
+    const set = new Set(visibleSiteIds)
+    return (siteId: string) => set.has(siteId)
+  }, [visibleSiteIds])
+
+  const sites = useMemo(
+    () => Object.values(sitesMap).filter((s) => isVisible(s.id)),
+    [sitesMap, isVisible]
+  )
+
   const recentAlerts = useMemo<AlertEntry[]>(() => {
     const activeSites = new Set(
       Object.entries(sitesMap)
@@ -133,9 +155,9 @@ export function useFirebaseData() {
         .map(([id]) => id)
     )
 
-    const sorted = [...todayAlerts, ...pastAlerts].sort(
-      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-    )
+    const sorted = [...todayAlerts, ...pastAlerts]
+      .filter((a) => isVisible(a.site_id))
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
 
     const seenSites = new Set<string>()
     return sorted.slice(0, 20).map((a) => {
@@ -145,9 +167,8 @@ export function useFirebaseData() {
         isLatest && activeSites.has(a.site_id) ? "active" : "resolved"
       return { ...a, alertStatus }
     })
-  }, [todayAlerts, pastAlerts, sitesMap])
+  }, [todayAlerts, pastAlerts, sitesMap, isVisible])
 
-  const sites = Object.values(sitesMap)
   const activeAlertCount = sites.filter((s) => s.alert).length
 
   return { sites, recentAlerts, hq, activeAlertCount }

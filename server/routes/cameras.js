@@ -1,9 +1,9 @@
 const express  = require('express')
 const pool     = require('../db')
-const { requireAuth, requireRole } = require('../middleware/auth')
+const { requireAuth } = require('../middleware/auth')
+const { getVisibleSiteIds, canManageSite, canManageCamera } = require('../services/visibility')
 
 const router   = express.Router()
-const adminOnly = requireRole('admin')
 
 router.use(requireAuth)
 
@@ -15,6 +15,10 @@ router.get('/', async (req, res) => {
   const { siteId } = req.query
   if (!siteId) return res.status(400).json({ error: 'siteId query param is required' })
   try {
+    const visibleSiteIds = await getVisibleSiteIds(req.user)
+    if (visibleSiteIds !== null && !visibleSiteIds.includes(siteId)) {
+      return res.status(403).json({ error: 'Forbidden' })
+    }
     const { rows } = await pool.query(
       `SELECT ${SAFE_COLS} FROM cameras WHERE site_id = $1 AND active = true ORDER BY id`,
       [siteId]
@@ -26,24 +30,37 @@ router.get('/', async (req, res) => {
 })
 
 // ── GET /api/cameras/all — list all cameras grouped with site info ───
-router.get('/all', async (_req, res) => {
+router.get('/all', async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT c.id, c.site_id, c.label, c.ip, c.port, c.channel, c.subtype,
-              c.active, c.created_at, c.stream_type, c.imou_device_id, c.imou_channel_id,
-              s.label AS site_label, s.type AS site_type
-       FROM cameras c
-       JOIN sites s ON s.id = c.site_id
-       ORDER BY s.label, c.id`
-    )
+    const visibleSiteIds = await getVisibleSiteIds(req.user)
+    const query = visibleSiteIds === null
+      ? pool.query(
+          `SELECT c.id, c.site_id, c.label, c.ip, c.port, c.channel, c.subtype,
+                  c.active, c.created_at, c.stream_type, c.imou_device_id, c.imou_channel_id,
+                  s.label AS site_label, s.type AS site_type, s.owner_id AS site_owner_id
+             FROM cameras c
+             JOIN sites s ON s.id = c.site_id
+            ORDER BY s.label, c.id`
+        )
+      : pool.query(
+          `SELECT c.id, c.site_id, c.label, c.ip, c.port, c.channel, c.subtype,
+                  c.active, c.created_at, c.stream_type, c.imou_device_id, c.imou_channel_id,
+                  s.label AS site_label, s.type AS site_type, s.owner_id AS site_owner_id
+             FROM cameras c
+             JOIN sites s ON s.id = c.site_id
+            WHERE c.site_id = ANY($1)
+            ORDER BY s.label, c.id`,
+          [visibleSiteIds]
+        )
+    const { rows } = await query
     res.json(rows)
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
 })
 
-// ── POST /api/cameras — add a camera ────────────────────────────────
-router.post('/', adminOnly, async (req, res) => {
+// ── POST /api/cameras — add a camera (must own the parent site) ─────
+router.post('/', async (req, res) => {
   const {
     site_id, label, stream_type = 'rtsp',
     // RTSP fields
@@ -63,6 +80,9 @@ router.post('/', adminOnly, async (req, res) => {
   }
 
   try {
+    if (!(await canManageSite(req.user, site_id))) {
+      return res.status(403).json({ error: 'Forbidden' })
+    }
     const { rows } = await pool.query(
       `INSERT INTO cameras
          (site_id, label, stream_type, ip, port, username, password, channel, subtype, imou_device_id, imou_channel_id)
@@ -89,10 +109,13 @@ router.post('/', adminOnly, async (req, res) => {
   }
 })
 
-// ── PUT /api/cameras/:id — update a camera ───────────────────────────
-router.put('/:id', adminOnly, async (req, res) => {
+// ── PUT /api/cameras/:id — update a camera (owner of parent site or admin) ─
+router.put('/:id', async (req, res) => {
   const { label, ip, port, username, password, channel, subtype, active, imou_device_id, imou_channel_id } = req.body
   try {
+    if (!(await canManageCamera(req.user, req.params.id))) {
+      return res.status(403).json({ error: 'Forbidden' })
+    }
     const sets = []
     const vals = []
     let i = 1
@@ -119,9 +142,12 @@ router.put('/:id', adminOnly, async (req, res) => {
   }
 })
 
-// ── DELETE /api/cameras/:id — delete a camera ───────────────────────
-router.delete('/:id', adminOnly, async (req, res) => {
+// ── DELETE /api/cameras/:id — delete a camera (owner of parent site or admin) ─
+router.delete('/:id', async (req, res) => {
   try {
+    if (!(await canManageCamera(req.user, req.params.id))) {
+      return res.status(403).json({ error: 'Forbidden' })
+    }
     const { rowCount } = await pool.query('DELETE FROM cameras WHERE id = $1', [req.params.id])
     if (rowCount === 0) return res.status(404).json({ error: 'Camera not found' })
     res.json({ ok: true })
