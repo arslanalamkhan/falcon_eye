@@ -38,6 +38,7 @@ function imouPost(endpoint, params) {
       hostname: url.hostname,
       path:     url.pathname,
       method:   'POST',
+      family:   4,  // force IPv4 — server has no global IPv6 route; Happy Eyeballs causes AggregateError otherwise
       headers: {
         'Content-Type':   'application/json',
         'Content-Length': Buffer.byteLength(body),
