@@ -1,5 +1,5 @@
 import { useEffect } from "react"
-import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet"
+import { MapContainer, TileLayer, LayersControl, Marker, Popup, useMap } from "react-leaflet"
 import { useNavigate } from "react-router-dom"
 import L from "leaflet"
 import "leaflet/dist/leaflet.css"
@@ -114,12 +114,32 @@ export default function LiveMap() {
             style={{ height: "100%", width: "100%" }}
             zoomControl
           >
-            <TileLayer
-              url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank">CARTO</a>'
-              subdomains="abcd"
-              maxZoom={19}
-            />
+            <LayersControl position="topright">
+              <LayersControl.BaseLayer checked name="Satellite">
+                <TileLayer
+                  url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                  attribution='Tiles &copy; <a href="https://www.esri.com" target="_blank">Esri</a> — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
+                  maxZoom={19}
+                />
+              </LayersControl.BaseLayer>
+
+              <LayersControl.BaseLayer name="Dark">
+                <TileLayer
+                  url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+                  attribution='Tiles &copy; <a href="https://www.esri.com" target="_blank">Esri</a> — Esri, HERE, Garmin, FAO, NOAA, USGS'
+                  maxZoom={16}
+                  maxNativeZoom={16}
+                />
+              </LayersControl.BaseLayer>
+
+              <LayersControl.Overlay checked name="Place labels">
+                <TileLayer
+                  url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
+                  attribution=""
+                  maxZoom={19}
+                />
+              </LayersControl.Overlay>
+            </LayersControl>
 
             <MapAutoFit sites={sites} />
 
