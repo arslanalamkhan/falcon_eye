@@ -10,6 +10,7 @@ const cameraRouter  = require('./routes/cameras')
 const streamRouter  = require('./routes/streams')
 const { startAlertRouter }     = require('./services/alertRouter')
 const { syncRoutingToFirebase } = require('./services/routingSync')
+const { startFmsSync }          = require('./services/fmsSync')
 
 const app  = express()
 const PORT = process.env.PORT || 3001
@@ -34,6 +35,7 @@ app.get('/api/health', (_req, res) => res.json({ status: 'ok', streams: require(
 app.listen(PORT, async () => {
   console.log(`Falcon Eye API running on http://localhost:${PORT}`)
   startAlertRouter()
+  startFmsSync()
   // Ensure Firebase routing node matches PostgreSQL on every restart
   try {
     await syncRoutingToFirebase()

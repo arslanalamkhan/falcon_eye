@@ -8,7 +8,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from "@/components/ui/dialog"
 import {
-  GitBranch, Train, HardHat, Radio, Plus, Trash2, Camera,
+  GitBranch, Train, HardHat, Radio, Satellite, Plus, Trash2, Camera,
   Loader2, Check, X, RefreshCw, AlertCircle, Users, ShieldCheck, KeyRound, Eye,
 } from "lucide-react"
 import type { Role } from "@/contexts/AuthContext"
@@ -16,7 +16,7 @@ import type { Role } from "@/contexts/AuthContext"
 // ── Types ─────────────────────────────────────────────────────────
 type Site = {
   id: string; label: string; type: string; region: string; active: boolean
-  owner_id: number | null; owner_name: string | null
+  source: string; owner_id: number | null; owner_name: string | null
 }
 type Receiver = {
   id: string; label: string; lea: string; city: string; active: boolean
@@ -293,7 +293,8 @@ function RoutingMatrix({ sites, receivers, activeRoutes, busyCells, onToggle, is
 function SitesPanel({ sites, onRefresh, isAdmin, currentUserId }: {
   sites: Site[]; onRefresh: () => void; isAdmin: boolean; currentUserId: number
 }) {
-  const [form, setForm] = useState({ id: '', label: '', type: 'train', region: '' })
+  const emptyForm = { id: '', label: '', type: 'train', region: '', source: 'cellular', mobile_id: '', imo: '', mmsi: '' }
+  const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [formErr, setFormErr] = useState('')
@@ -305,7 +306,7 @@ function SitesPanel({ sites, onRefresh, isAdmin, currentUserId }: {
     setSaving(true)
     try {
       await api.post('/api/admin/sites', form)
-      setForm({ id: '', label: '', type: 'train', region: '' })
+      setForm(emptyForm)
       onRefresh()
     } catch (err) {
       setFormErr(err instanceof Error ? err.message : 'Failed')
@@ -343,6 +344,27 @@ function SitesPanel({ sites, onRefresh, isAdmin, currentUserId }: {
             </select>
           </div>
           <FormField label="Region" value={form.region} onChange={v => setForm(f => ({ ...f, region: v }))} placeholder="KP/Punjab" />
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Tracking Hardware</label>
+            <select
+              value={form.source}
+              onChange={e => setForm(f => ({ ...f, source: e.target.value }))}
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            >
+              <option value="cellular">Cellular (ESP32 panic button)</option>
+              <option value="satellite_fms">Satellite (Falcon Mega Track)</option>
+            </select>
+          </div>
+          {form.source === 'satellite_fms' && (
+            <>
+              <FormField label="Mobile ID" value={form.mobile_id} onChange={v => setForm(f => ({ ...f, mobile_id: v }))} placeholder="01398397SKY12AE" required mono />
+              <FormField label="IMO (optional)" value={form.imo} onChange={v => setForm(f => ({ ...f, imo: v }))} placeholder="rarely set on ground terminals" mono />
+              <FormField label="MMSI (optional)" value={form.mmsi} onChange={v => setForm(f => ({ ...f, mmsi: v }))} placeholder="rarely set on ground terminals" mono />
+              <p className="col-span-2 md:col-span-4 text-[11px] text-muted-foreground -mt-1">
+                Mobile ID is the terminal's own hardware serial (shown as "MobileID" in Falcon Mega Track's data) and is required to match incoming reports to this site. IMO/MMSI are optional — these terminals report placeholder values for them, not real ship identifiers.
+              </p>
+            </>
+          )}
           <div className="col-span-2 md:col-span-4 flex items-center gap-3">
             <Button type="submit" size="sm" disabled={saving}>
               {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-1.5" />}
@@ -354,13 +376,16 @@ function SitesPanel({ sites, onRefresh, isAdmin, currentUserId }: {
       </div>
 
       <EntityTable
-        columns={['Site ID', 'Label', 'Type', 'Region', 'Owner']}
+        columns={['Site ID', 'Label', 'Type', 'Source', 'Region', 'Owner']}
         rows={sites.map(s => ({
           key: s.id,
           cells: [
             <code className="text-[11px] text-primary">{s.id}</code>,
             s.label,
             <Badge variant={s.type === 'train' ? 'info' : 'warning'} className="text-[10px]">{s.type}</Badge>,
+            s.source === 'satellite_fms'
+              ? <Badge variant="info" className="text-[10px] gap-1"><Satellite className="h-2.5 w-2.5" />Satellite</Badge>
+              : <span className="text-[11px] text-muted-foreground">Cellular</span>,
             s.region || '—',
             s.owner_id === currentUserId ? 'You' : (s.owner_name || '—'),
           ],

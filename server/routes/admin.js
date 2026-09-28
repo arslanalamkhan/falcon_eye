@@ -125,18 +125,63 @@ router.delete('/routes/:siteId/:receiverId', async (req, res) => {
 })
 
 // ── POST /api/admin/sites — add a site (owned by the creator) ────
+// source 'satellite_fms' registers a site tracked via a Falcon Mega Track
+// terminal instead of an ESP32 panic button — requires the terminal's
+// mobile_id (hardware serial) so fmsSync can match incoming position
+// reports to it, independent of the site's physical `type`. IMO/MMSI are
+// optional — FMS returns placeholder junk for them on non-vessel terminals.
 router.post('/sites', async (req, res) => {
-  const { id, label, type, region } = req.body
+  const { id, label, type, region, source, mobile_id, imo, mmsi } = req.body
   if (!id || !label) return res.status(400).json({ error: 'id and label are required' })
-  if (!['train', 'mine', 'other'].includes(type)) return res.status(400).json({ error: 'type must be train, mine, or other' })
+  if (!['train', 'mine', 'other'].includes(type)) {
+    return res.status(400).json({ error: 'type must be train, mine, or other' })
+  }
+  const siteSource = source === 'satellite_fms' ? 'satellite_fms' : 'cellular'
+  if (siteSource === 'satellite_fms' && !mobile_id) {
+    return res.status(400).json({ error: 'mobile_id (terminal serial) is required for satellite (FMS) sites' })
+  }
+
+  const client = await pool.connect()
   try {
-    const { rows } = await pool.query(
-      'INSERT INTO sites (id, label, type, region, owner_id) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-      [id.trim(), label.trim(), type, (region || '').trim(), req.user.id]
+    await client.query('BEGIN')
+    const { rows } = await client.query(
+      'INSERT INTO sites (id, label, type, region, source, owner_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+      [id.trim(), label.trim(), type, (region || '').trim(), siteSource, req.user.id]
     )
+    if (siteSource === 'satellite_fms') {
+      await client.query(
+        'INSERT INTO fms_assets (site_id, mobile_id, imo, mmsi, asset_name) VALUES ($1, $2, $3, $4, $5)',
+        [id.trim(), mobile_id.trim(), (imo || '').trim() || null, (mmsi || '').trim() || null, label.trim()]
+      )
+    }
+    await client.query('COMMIT')
     res.status(201).json(rows[0])
   } catch (err) {
-    if (err.code === '23505') return res.status(409).json({ error: 'Site ID already exists' })
+    await client.query('ROLLBACK')
+    if (err.code === '23505') return res.status(409).json({ error: 'Site ID, Mobile ID, IMO, or MMSI already exists' })
+    res.status(500).json({ error: err.message })
+  } finally {
+    client.release()
+  }
+})
+
+// ── GET /api/admin/sites/:id/history — last 15 days of FMS position history ─
+router.get('/sites/:id/history', async (req, res) => {
+  try {
+    const visibleSiteIds = await getVisibleSiteIds(req.user)
+    if (visibleSiteIds !== null && !visibleSiteIds.includes(req.params.id)) {
+      return res.status(403).json({ error: 'Forbidden' })
+    }
+    const { rows } = await pool.query(
+      `SELECT reference_id, lat, lng, speed_kmh, report_type, received_at
+         FROM fms_position_history
+        WHERE site_id = $1
+        ORDER BY received_at DESC
+        LIMIT 2000`,
+      [req.params.id]
+    )
+    res.json(rows)
+  } catch (err) {
     res.status(500).json({ error: err.message })
   }
 })
