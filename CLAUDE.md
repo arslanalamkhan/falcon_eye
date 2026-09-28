@@ -21,9 +21,11 @@
 | Layer | Technology |
 |---|---|
 | Frontend | React 19 + TypeScript + Vite 8 |
-| Styling | Tailwind CSS v3 + Shadcn UI (Radix primitives) |
-| Routing | React Router DOM v7 |
-| Map | react-leaflet + Leaflet.js (CartoDB dark tiles) |
+| Styling | Tailwind CSS v3 + Shadcn-style owned components (Radix primitives) + `tailwindcss-animate` |
+| Typography | Inter Variable + JetBrains Mono Variable, self-hosted via `@fontsource-variable/*` (no CDN — works on closed networks) |
+| Feedback | `sonner` toasts + app-wide confirm dialog (`useConfirm`) |
+| Routing | React Router DOM v7 (route-level code splitting with `React.lazy`) |
+| Map | react-leaflet + Leaflet.js (Esri satellite / dark-gray tiles) |
 | Backend | Node.js + Express 5 |
 | Database | PostgreSQL 17 (via `pg` pool) |
 | Auth | JWT (jsonwebtoken) + bcryptjs |
@@ -41,15 +43,27 @@ falcon_eye/
 ├── client/                        # React frontend (own package.json)
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── layout/            # DashboardLayout, Topbar, Sidebar, ProtectedRoute
-│   │   │   ├── admin/             # Admin panel tabs (see Frontend Architecture below)
-│   │   │   └── ui/                # Shadcn-style primitives (Button, Badge, Avatar, etc.)
-│   │   ├── contexts/              # AuthContext (user + department + visible-site access)
+│   │   │   ├── layout/            # App shell: DashboardLayout, Sidebar, Topbar, MobileNav, CommandPalette,
+│   │   │   │                      #   AlertPopup, AlertBell, UserMenu, PageHeader, SplashScreen, navigation.ts
+│   │   │   ├── ui/                # Design-system primitives (see UI / Design System below)
+│   │   │   ├── admin/             # Admin panel tabs + their dialogs
+│   │   │   ├── dashboard/         # StatCard, ActiveAlertsBanner, RecentAlerts, SiteStatusList
+│   │   │   ├── map/               # SiteMarkers, MapController (fly-to/fit), SitePanel
+│   │   │   └── sites/site-ui.tsx  # SiteStatusBadge, SiteStateDot, SiteTypeIcon
+│   │   ├── contexts/              # AuthContext (user + department + access), ConfirmContext
 │   │   ├── hooks/
-│   │   │   ├── useFirebaseData.ts      # Live Firebase listener — sites, alerts, logs
-│   │   │   └── useAlertNotification.ts # Live panic-alert popup queue
+│   │   │   ├── useFirebaseData.ts       # Live sites (merged with PostgreSQL access list), alerts, logs
+│   │   │   ├── useAlertNotification.ts  # Active alerts + popup queue
+│   │   │   ├── useFirebaseConnection.ts # connecting | online | offline (with grace period)
+│   │   │   ├── useConfirm.ts            # `await confirm({...})` → boolean
+│   │   │   └── useNow, usePageTitle, useMediaQuery, usePersistentState
+│   │   ├── images/                # Logo.png is the 1254px master — the app uses the derived
+│   │   │                          #   logo-full.png (480px) and logo-mark.png (192px emblem crop)
 │   │   ├── lib/
-│   │   │   ├── utils.ts           # cn() helper
+│   │   │   ├── utils.ts           # cn(), errorMessage(), slugify()
+│   │   │   ├── format.ts          # timeAgo, formatCoords, formatDateTime, initials, pluralize
+│   │   │   ├── sites.ts           # siteState(), hasCoords(), sitesSummary() — live-state classification
+│   │   │   ├── title.ts           # document.title = "(n) ALERT · Page · Falcon Eye"
 │   │   │   ├── firebase.ts        # Firebase app init + db export
 │   │   │   └── api.ts             # Central fetch client (JWT injection, 401 redirect)
 │   │   ├── types/
@@ -62,7 +76,7 @@ falcon_eye/
 │   │   │   └── Login.tsx
 │   │   ├── App.tsx                # Router + AuthProvider tree
 │   │   ├── main.tsx               # React DOM entry
-│   │   └── index.css              # Tailwind directives + CSS vars + Leaflet overrides
+│   │   └── index.css              # Theme tokens, base styles, utilities, Leaflet overrides, marker styles
 │   ├── .env                       # VITE_ prefixed Firebase config (never commit)
 │   ├── package.json               # Frontend deps only
 │   └── vite.config.ts             # Path alias: @ → src/
@@ -432,25 +446,29 @@ A user's "universe" is their department's view-scope resolution. Operators are a
 
 ### Architecture
 - **Pages** (`src/pages/`) — route-level components, own their data-fetching and layout
-- **Layout components** (`src/components/layout/`) — structural shell (Topbar, Sidebar, DashboardLayout, ProtectedRoute)
-- **`src/components/admin/`** — Admin panel tab components (`DepartmentsPanel`, `UsersPanel`, `SitesPanel`, `ReceiversPanel`, `RoutingMatrix`, `CamerasPanel`, `AuditPanel`, `SiteAccessDialog`), plus `shared.tsx` (FormField, EntityTable, CountBadge, DepartmentBadge) and `types.ts`. `pages/Admin.tsx` is just the shell — tab state, data loading, the super-admin department filter. Follow this split for any new Admin tab rather than growing `Admin.tsx`.
+- **Layout components** (`src/components/layout/`) — the shell. `DashboardLayout` owns the single `useAlertNotification()` and `useFirebaseConnection()` and passes results down to `Sidebar`, `Topbar` (+ `AlertBell`, `UserMenu`), `MobileNav`, `CommandPalette` and `AlertPopup`. Navigation items are defined once in `layout/navigation.ts` — add new pages there, not in each nav component.
+- **`src/components/admin/`** — one component per Admin tab (`DepartmentsPanel`, `UsersPanel`, `SitesPanel`, `ReceiversPanel`, `RoutingMatrix`, `CamerasPanel`, `AuditPanel`) plus their dialogs (`AddSiteDialog`, `UserDialogs`, `DepartmentDialogs`, `SiteAccessDialog`), `shared.tsx` (RoleBadge, DepartmentBadge, PanelToolbar, PanelSkeleton, ReadOnlyHint) and `types.ts`. `pages/Admin.tsx` is only the shell — URL-synced tab (`?tab=`), data loading, the super-admin department filter.
+- **Feature folders** (`components/dashboard/`, `components/map/`, `components/sites/`) — page-specific pieces, split out to keep pages small
 - **UI primitives** (`src/components/ui/`) — Shadcn-style, stateless, styled with `cva` + Tailwind
-- **Contexts** (`src/contexts/`) — global state only (auth: user + department + visible-site access). Not a replacement for local state
+- **Contexts** (`src/contexts/`) — global services only: auth (user + department + visible-site access) and the confirm dialog. Not a replacement for local state
 - **`src/types/access.ts`** — shared `Role`/`Department`/`Access` types + `ROLE_LABELS`; import `Role` from here, not from `AuthContext`
-- **`src/lib/utils.ts`** — pure utility functions only (`cn`, formatters, helpers)
+- **`src/lib/utils.ts`** — `cn`, `errorMessage`, `slugify`. Display formatters live in `src/lib/format.ts`; site live-state logic in `src/lib/sites.ts` (keep non-component helpers out of `.tsx` files so fast refresh keeps working)
 - **`src/lib/api.ts`** — central fetch client; use this for all backend calls, never raw `fetch`
 - **`src/lib/firebase.ts`** — Firebase app init; imports `db` from here for all RTDB access
-- **`src/hooks/useFirebaseData.ts`** — composite hook for all live Firebase data (sites, alerts, logs), pre-filtered to `useAuth().access`
-- **`src/hooks/useAlertNotification.ts`** — live panic-alert popup queue, also filtered to `useAuth().access`
+- **`src/hooks/useFirebaseData.ts`** — composite hook for all live Firebase data. Sites come from the PostgreSQL access list (`access.sites`, which carries label/type/department) merged with live Firebase state, so a registered device that has never reported still appears (`reported: false` → "Awaiting first report"). Exposes `sitesLoaded`/`alertsLoaded` — always render a skeleton until loaded and a real empty state after, never an endless spinner.
+- **`src/hooks/useAlertNotification.ts`** — `activeAlerts` (every visible site in alert — drives the bell, nav badges and tab title) and a popup queue (each alert cycle pops up once per session)
 
 ### Routes
 
 | Path | Page | Description |
 |---|---|---|
-| `/` | Dashboard | Live stats, active alerts, recent alert feed, site status |
-| `/map` | LiveMap | Leaflet map with real-time GPS markers per site |
-| `/admin` | Admin | Departments (super only), users, sites, receivers, routing, cameras, audit log — `super_admin`/`dept_admin` only |
-| `/login` | Login | JWT auth form |
+| `/` | Dashboard | Active-alert banner, KPIs, recent alert timeline, site status |
+| `/map?site=<id>` | LiveMap | Full-bleed map; `?site=` flies to and opens that site (used by alert popup, bell, search) |
+| `/cameras?site=<id>` | Cameras | Camera grid for a site; defaults to the first site (alerts sort first) |
+| `/admin?tab=<tab>` | Admin | `departments` (super only), `users`, `sites`, `receivers`, `routing`, `cameras`, `audit` — `super_admin`/`dept_admin` only |
+| `/login` | Login | Sign-in; returns the user to the page they originally requested (`location.state.from`) |
+
+Deep links are a feature: when linking to a site or tab from anywhere in the app, use these query params rather than local state.
 
 ### Component Rules
 - Functional components only — no class components
@@ -474,10 +492,12 @@ A user's "universe" is their department's view-scope resolution. Operators are a
 ### Styling
 - Tailwind utility classes only — no inline `style={{}}` except for truly dynamic values (e.g. calculated pixel widths)
 - Use the `cn()` helper from `src/lib/utils.ts` for conditional class merging
-- Theme tokens (colors, radius, spacing) come from CSS variables in `index.css` — do not hardcode hex values in components
+- Theme tokens (colors, radius, spacing) come from CSS variables in `index.css` — do not hardcode hex values **or raw Tailwind palette colours** (`red-500`, `emerald-400`) in components; use the semantic tokens (`danger`, `success`, `warning`, `info`, `primary`, `muted`)
+- Opacity modifiers must be on Tailwind's scale (`/10`, `/15`, `/20`, `/25`…) — e.g. `/12` silently generates nothing. Use arbitrary values (`/[0.07]`) when you need something off-scale
+- Use `text-2xs` (11px) as the smallest text size — never `text-[10px]`
 - Dark theme is the default and only theme — do not add light mode without discussion
-- Responsive breakpoints: `sm` (640), `md` (768), `lg` (1024), `xl` (1280)
-- Leaflet dark theme overrides live in `index.css` — do not add Leaflet CSS customisations elsewhere
+- Responsive breakpoints: `sm` (640), `md` (768), `lg` (1024), `xl` (1280), `2xl` (1536). `md` is the phone/desktop split: below it the sidebar is replaced by `MobileNav`, dialogs become bottom sheets and `DataTable` renders cards
+- Leaflet dark theme overrides live in `index.css` — do not add Leaflet CSS customisations elsewhere. `leaflet/dist/leaflet.css` is imported in `main.tsx` **before** `index.css`; the map page is lazy-loaded, so importing it there would load Leaflet's defaults after our overrides and win the cascade (white popups)
 
 ### TypeScript
 - Strict mode is on — no `any`, no `@ts-ignore`
@@ -499,28 +519,54 @@ A user's "universe" is their department's view-scope resolution. Operators are a
 ## UI / Design System
 
 ### Theme
-- Dark navy/slate palette — this is a surveillance/ops tool, not a consumer app
-- Primary: blue (`hsl(210 100% 52%)`)
-- Danger/alerts: red variants
-- Warning: amber variants
-- Success/online: emerald variants
-- Info: primary/blue variants
-- All colours defined as CSS variables in `client/src/index.css`
+- Dark-only command-center palette derived from the logo: navy background (`#010A1F` family), electric-blue primary (`#0059FB` family, `--primary: 219 100% 56%`), red as the alert accent
+- Semantic tokens in `index.css` (HSL channels, used as `hsl(var(--x))`): `background`, `card`, `elevated`, `popover`, `primary`, `secondary`, `muted`, `accent`, `border`, `input`, `ring`, plus status colours `danger`, `success`, `warning`, `info`
+- Radius `0.75rem`; shadows `shadow-card`, `shadow-pop`, `shadow-glow-danger`, `shadow-glow-primary` (see `tailwind.config.js`)
+- Fonts: Inter (UI), JetBrains Mono (`font-mono` — IDs, coordinates, department codes)
+- `prefers-reduced-motion` is honoured globally in `index.css`
+
+### Status language (be consistent)
+| State | Colour | Where it comes from |
+|---|---|---|
+| Alert / panic | `danger` (red), pulsing dot | `site.alert` |
+| Standby · live GPS | `success` (green) | `gps.status === "live"` |
+| Standby · last known | `warning` (amber) | reported, GPS not live |
+| Awaiting first report | muted outline | in PostgreSQL, never written to Firebase |
+
+Always derive this with `siteState()` from `lib/sites.ts` and render it with `SiteStatusBadge`/`SiteStateDot` — don't re-implement the rules in a page.
 
 ### Badge Variants
-| Variant | Colour | Use |
-|---|---|---|
-| `danger` | Red | Active alerts, critical status |
-| `warning` | Amber | Offline devices, fallback GPS |
-| `success` | Emerald | Online, standby, all-clear |
-| `info` | Blue | Site type: train, system events |
+| Variant | Use |
+|---|---|
+| `danger` | Active alerts, destructive audit actions |
+| `warning` | Last-known GPS, inactive accounts/departments |
+| `success` | Live, active, all-clear, IMOU Cloud |
+| `info` | Satellite tracking, RTSP, informational |
+| `outline` | Department codes (with `font-mono`), neutral states |
+| `default` | Super Admin role, HEAD department |
 
-### Alert Severity Levels
-| Level | Colour | Use |
-|---|---|---|
-| `critical` | Red | Panic button triggered, immediate threat |
-| `warning` | Amber | Device offline, low battery, connectivity loss |
-| `info` | Blue | Status changes, system events |
+Badges accept `size="sm"` and `dot` / `dot="pulse"`.
+
+### Primitives (`src/components/ui/`)
+| Component | Notes |
+|---|---|
+| `Button` | Variants `default`, `secondary`, `outline`, `ghost`, `destructive`, `danger-soft`, `link`; sizes `xs`, `sm`, `default`, `lg`, `icon`, `icon-sm`; `loading` prop shows a spinner and disables |
+| `Input`, `SearchInput`, `Select`, `Field`, `Label` | `Field` wires label ↔ control ids and hint/error `aria-describedby`; `Select` is a styled native select (best on mobile) |
+| `Card` (+ Header/Title/Content/Footer) | Has `min-w-0` built in — cards are grid/flex children, and long truncated text would otherwise overflow the page on phones |
+| `Dialog` (+ Header/Body/Footer) | Bottom sheet below `sm`, centered modal above; `size` = `sm`/`md`/`lg`/`xl`. Put a `<form>` inside `DialogContent` wrapping Header/Body/Footer |
+| `DataTable`, `RowActions` | Table on `md+`, stacked cards on phones. Columns declare `mobile: "title" / "subtitle" / "field" / "hidden"`. Per-row actions go in the `⋯` `RowActions` menu |
+| `DropdownMenu`, `Tip` (tooltip), `Tabs`, `ChipGroup`, `Switch`, `Skeleton`/`SkeletonRows`, `EmptyState` | `Tabs` is an accessible tablist with arrow-key navigation |
+| `ConfirmProvider` + `useConfirm()` | `if (!(await confirm({ title, description, destructive: true }))) return` |
+
+### UX conventions
+- **Every destructive action is confirmed** via `useConfirm()` (deletes, deactivations) — never a one-click delete
+- **Every mutation reports its outcome**: `toast.success(...)` on success, `toast.error(title, { description: errorMessage(err) })` on failure. Never `catch { /* ignore */ }`
+- **Loading → skeleton, empty → `EmptyState` with a next step, error → `EmptyState tone="danger"` with retry.** No indefinite spinners
+- **Add/edit forms live in dialogs**, opened from a primary button in the panel toolbar; lists stay uncluttered
+- Pages start with `PageHeader` (it also sets the browser tab title); full-bleed pages call `usePageTitle()` directly
+- Icon-only buttons need an `aria-label`; add a `Tip` when the meaning isn't obvious
+- Touch targets ≥ 36px on phones; primary actions sit within thumb reach (bottom sheets, bottom nav)
+- Honest copy: the web app is read-only to Firebase, so the alert popup says **Dismiss** (not "Acknowledge") and explains the alert stays active until reset at the receiver
 
 ### Component Library
 Shadcn UI pattern — components are owned code in `src/components/ui/`, not a black-box dependency. Edit them directly when needed. Do not install the Shadcn CLI to overwrite existing components without checking first.
@@ -580,5 +626,5 @@ Default endpoint is `openapi.easy4ip.com` (works globally for most accounts). Ch
 - Mining Sites management page
 - QRF Dispatch page
 - Device management page (ESP32 node inventory, battery, signal)
-- Notification sound + browser push for incoming panic alerts
+- Browser push notifications for incoming panic alerts (in-app siren, tab-title alert count and alert bell already exist)
 - Production deployment config (env vars, CORS, HTTPS)

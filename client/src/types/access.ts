@@ -14,8 +14,12 @@ export type Department = {
   active: boolean
 }
 
+export type SiteType = 'train' | 'mine' | 'other'
+
 export type VisibleSite = {
   id: string
+  label: string
+  type: SiteType
   department_id: number
   department_code: string
 }

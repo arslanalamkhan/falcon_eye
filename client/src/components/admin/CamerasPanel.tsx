@@ -1,227 +1,274 @@
-import { useState, useEffect } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { useNavigate } from "react-router-dom"
+import { toast } from "sonner"
+import { Plus, Camera, Trash2, Video, SearchX, CircleAlert, RefreshCw, Cloud, Cable } from "lucide-react"
 import { api } from "@/lib/api"
+import { cn, errorMessage } from "@/lib/utils"
+import { useConfirm } from "@/hooks/useConfirm"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Plus, Trash2, Loader2 } from "lucide-react"
-import { FormField } from "./shared"
+import { Card } from "@/components/ui/card"
+import { Input, Select, Field, SearchInput } from "@/components/ui/input"
+import { EmptyState } from "@/components/ui/empty-state"
+import { DataTable, RowActions, type Column } from "@/components/ui/data-table"
+import {
+  Dialog, DialogContent, DialogHeader, DialogBody, DialogFooter, DialogTitle, DialogDescription,
+} from "@/components/ui/dialog"
+import { DepartmentBadge, PanelSkeleton, PanelToolbar } from "./shared"
 import type { Site, CameraRow } from "./types"
 
 export function CamerasPanel({ sites, isSuper, currentDeptId }: { sites: Site[]; isSuper: boolean; currentDeptId: number }) {
-  const manageableSites = sites.filter(s => isSuper || s.department_id === currentDeptId)
-  const [cameras, setCameras]   = useState<CameraRow[]>([])
-  const [loading, setLoading]   = useState(true)
-  const [deleting, setDeleting] = useState<number | null>(null)
-  const [saving, setSaving]     = useState(false)
-  const [formErr, setFormErr]   = useState('')
-  const [form, setForm] = useState({
-    site_id: '', label: 'Camera', stream_type: 'rtsp',
-    // RTSP fields
-    ip: '', port: '554', username: '', password: '', channel: '1', subtype: '0',
-    // IMOU fields
-    imou_device_id: '', imou_channel_id: '0',
-  })
+  const navigate = useNavigate()
+  const confirm = useConfirm()
+  const manageableSites = sites.filter((s) => isSuper || s.department_id === currentDeptId)
 
-  const loadCameras = async () => {
-    setLoading(true)
+  const [cameras, setCameras] = useState<CameraRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState("")
+  const [query, setQuery]     = useState("")
+  const [addOpen, setAddOpen] = useState(false)
+
+  const load = useCallback(async () => {
+    setError("")
     try {
-      const rows = await api.get<CameraRow[]>('/api/cameras/all')
-      setCameras(rows)
+      setCameras(await api.get<CameraRow[]>("/api/cameras/all"))
+    } catch (err) {
+      setError(errorMessage(err, "Couldn't load cameras"))
     } finally {
       setLoading(false)
     }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return cameras
+    return cameras.filter((c) => [c.label, c.site_label, c.site_id, c.ip, c.imou_device_id].some((v) => v?.toLowerCase().includes(q)))
+  }, [cameras, query])
+
+  const canManage = (c: CameraRow) => isSuper || c.site_department_id === currentDeptId
+
+  const remove = async (c: CameraRow) => {
+    const ok = await confirm({
+      title: `Delete ${c.label}?`,
+      description: `This camera will be removed from ${c.site_label}. Any live stream stops.`,
+      confirmLabel: "Delete camera",
+      destructive: true,
+    })
+    if (!ok) return
+    try {
+      await api.delete(`/api/cameras/${c.id}`)
+      toast.success(`${c.label} deleted`)
+      load()
+    } catch (err) {
+      toast.error("Couldn't delete camera", { description: errorMessage(err) })
+    }
   }
 
-  useEffect(() => { loadCameras() }, [])
+  const columns: Column<CameraRow>[] = [
+    {
+      id: "camera", header: "Camera", mobile: "title",
+      cell: (c) => (
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/60 text-muted-foreground md:flex">
+            <Video className="h-4 w-4" />
+          </div>
+          <div className="min-w-0">
+            <p className="truncate font-medium">{c.label}</p>
+            <p className="truncate text-xs text-muted-foreground">{c.site_label}</p>
+          </div>
+        </div>
+      ),
+    },
+    { id: "dept", header: "Department", cell: (c) => <DepartmentBadge code={c.site_department_code} /> },
+    {
+      id: "type", header: "Stream",
+      cell: (c) => c.stream_type === "imou"
+        ? <Badge variant="success" size="sm"><Cloud /> IMOU Cloud</Badge>
+        : <Badge variant="info" size="sm"><Cable /> RTSP</Badge>,
+    },
+    {
+      id: "conn", header: "Connection",
+      cell: (c) => (
+        <span className="font-mono text-xs text-muted-foreground">
+          {c.stream_type === "imou" ? `${c.imou_device_id} · ch${c.imou_channel_id}` : `${c.ip}:${c.port} · ch${c.channel}/${c.subtype === 0 ? "main" : "sub"}`}
+        </span>
+      ),
+    },
+  ]
 
-  const addCamera = async (e: React.FormEvent) => {
+  if (loading) return <PanelSkeleton />
+
+  return (
+    <>
+      <PanelToolbar
+        actions={
+          <Button onClick={() => setAddOpen(true)} disabled={manageableSites.length === 0} title={manageableSites.length === 0 ? "Add a site in your department first" : undefined}>
+            <Plus /> Add camera
+          </Button>
+        }
+      >
+        <div className="w-full sm:max-w-xs">
+          <SearchInput value={query} onChange={setQuery} placeholder="Search cameras…" />
+        </div>
+      </PanelToolbar>
+
+      <Card className="overflow-hidden">
+        {error ? (
+          <EmptyState icon={CircleAlert} tone="danger" title="Couldn't load cameras" description={error}
+            action={<Button variant="outline" onClick={() => { setLoading(true); load() }}><RefreshCw /> Try again</Button>} />
+        ) : (
+          <DataTable
+            columns={columns}
+            rows={filtered}
+            rowKey={(c) => c.id}
+            actions={(c) => (
+              <RowActions
+                label={`Actions for ${c.label}`}
+                actions={[
+                  { label: "Watch live", icon: Camera, onSelect: () => navigate(`/cameras?site=${encodeURIComponent(c.site_id)}`) },
+                  { label: "Delete camera", icon: Trash2, destructive: true, separated: true, hidden: !canManage(c), onSelect: () => remove(c) },
+                ]}
+              />
+            )}
+            empty={cameras.length === 0 ? (
+              <EmptyState
+                icon={Video}
+                title="No cameras yet"
+                description={manageableSites.length === 0 ? "Add a site in your department, then attach cameras to it." : "Attach an RTSP or IMOU Cloud camera to one of your sites."}
+                action={manageableSites.length > 0 ? <Button onClick={() => setAddOpen(true)}><Plus /> Add a camera</Button> : undefined}
+              />
+            ) : (
+              <EmptyState icon={SearchX} title="No matching cameras" />
+            )}
+          />
+        )}
+      </Card>
+
+      <AddCameraDialog open={addOpen} onOpenChange={setAddOpen} sites={manageableSites} onCreated={load} />
+    </>
+  )
+}
+
+function AddCameraDialog({ open, onOpenChange, sites, onCreated }: {
+  open: boolean; onOpenChange: (open: boolean) => void; sites: Site[]; onCreated: () => void
+}) {
+  const empty = {
+    site_id: "", label: "Camera", stream_type: "rtsp" as "rtsp" | "imou",
+    ip: "", port: "554", username: "", password: "", channel: "1", subtype: "0",
+    imou_device_id: "", imou_channel_id: "0",
+  }
+  const [form, setForm]     = useState(empty)
+  const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState("")
+  const set = (patch: Partial<typeof empty>) => setForm((f) => ({ ...f, ...patch }))
+
+  const close = () => { setForm(empty); setError(""); setSaving(false); onOpenChange(false) }
+
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setFormErr('')
+    setError("")
     setSaving(true)
+    const payload = form.stream_type === "imou"
+      ? { site_id: form.site_id, label: form.label, stream_type: "imou", imou_device_id: form.imou_device_id, imou_channel_id: form.imou_channel_id }
+      : {
+          site_id: form.site_id, label: form.label, stream_type: "rtsp",
+          ip: form.ip, port: parseInt(form.port) || 554, username: form.username, password: form.password,
+          channel: parseInt(form.channel) || 1, subtype: parseInt(form.subtype) || 0,
+        }
     try {
-      const payload = form.stream_type === 'imou'
-        ? {
-            site_id: form.site_id, label: form.label, stream_type: 'imou',
-            imou_device_id: form.imou_device_id, imou_channel_id: form.imou_channel_id,
-          }
-        : {
-            site_id: form.site_id, label: form.label, stream_type: 'rtsp',
-            ip: form.ip, port: parseInt(form.port) || 554,
-            username: form.username, password: form.password,
-            channel: parseInt(form.channel) || 1, subtype: parseInt(form.subtype) || 0,
-          }
-      await api.post('/api/cameras', payload)
-      setForm({
-        site_id: form.site_id, label: 'Camera', stream_type: form.stream_type,
-        ip: '', port: '554', username: '', password: '', channel: '1', subtype: '0',
-        imou_device_id: '', imou_channel_id: '0',
-      })
-      await loadCameras()
+      await api.post("/api/cameras", payload)
+      toast.success(`${form.label} added`)
+      onCreated()
+      close()
     } catch (err) {
-      setFormErr(err instanceof Error ? err.message : 'Failed')
-    } finally {
+      setError(errorMessage(err, "Couldn't add camera"))
       setSaving(false)
     }
   }
 
-  const del = async (id: number) => {
-    setDeleting(id)
-    try { await api.delete(`/api/cameras/${id}`); await loadCameras() }
-    catch { /* ignore */ }
-    finally { setDeleting(null) }
-  }
-
   return (
-    <div className="space-y-5">
-      {manageableSites.length === 0 ? (
-        <div className="rounded-lg border border-border bg-card p-4 text-xs text-muted-foreground">
-          Add a site in your department before attaching a camera to it.
-        </div>
-      ) : (
-        <div className="rounded-lg border border-border bg-card p-4">
-          <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
-            <Plus className="h-4 w-4 text-primary" /> Add Camera
-          </h3>
-          <form onSubmit={addCamera} className="space-y-3">
-            {/* Row 1: Site, Label, Stream Type */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <div className="flex flex-col gap-1">
-                <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Site</label>
-                <select
-                  value={form.site_id}
-                  onChange={e => setForm(f => ({ ...f, site_id: e.target.value }))}
-                  required
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                >
-                  <option value="" disabled>Select site…</option>
-                  {manageableSites.map(s => <option key={s.id} value={s.id}>{s.label} ({s.department_code})</option>)}
-                </select>
-              </div>
-              <FormField label="Label" value={form.label} onChange={v => setForm(f => ({ ...f, label: v }))} placeholder="Camera 1" required />
-              <div className="flex flex-col gap-1">
-                <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Stream Type</label>
-                <select
-                  value={form.stream_type}
-                  onChange={e => setForm(f => ({ ...f, stream_type: e.target.value }))}
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                >
-                  <option value="rtsp">RTSP (Local / IP Camera)</option>
-                  <option value="imou">IMOU Cloud</option>
-                </select>
-              </div>
+    <Dialog open={open} onOpenChange={(o) => { if (!o) close() }}>
+      <DialogContent size="lg">
+        <form onSubmit={submit} className="flex min-h-0 flex-col">
+          <DialogHeader icon={Camera}>
+            <DialogTitle>Add camera</DialogTitle>
+            <DialogDescription>Attach a camera to one of your sites.</DialogDescription>
+          </DialogHeader>
+          <DialogBody className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Site" required>
+                <Select value={form.site_id} onChange={(e) => set({ site_id: e.target.value })} required autoFocus>
+                  <option value="" disabled>Select a site…</option>
+                  {sites.map((s) => <option key={s.id} value={s.id}>{s.label} ({s.department_code})</option>)}
+                </Select>
+              </Field>
+              <Field label="Camera name" required>
+                <Input value={form.label} onChange={(e) => set({ label: e.target.value })} placeholder="Front carriage" required />
+              </Field>
             </div>
 
-            {/* Row 2: Type-specific fields */}
-            {form.stream_type === 'imou' ? (
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <FormField
-                  label="IMOU Device ID"
-                  value={form.imou_device_id}
-                  onChange={v => setForm(f => ({ ...f, imou_device_id: v }))}
-                  placeholder="e.g. AABHD12345678901"
-                  required mono
-                />
-                <FormField
-                  label="Channel ID"
-                  value={form.imou_channel_id}
-                  onChange={v => setForm(f => ({ ...f, imou_channel_id: v }))}
-                  placeholder="0"
-                  mono
-                />
+            <fieldset>
+              <legend className="mb-1.5 text-xs font-medium text-foreground/90">Stream source</legend>
+              <div className="grid grid-cols-2 gap-2">
+                {([["rtsp", Cable, "RTSP", "Direct IP camera"], ["imou", Cloud, "IMOU Cloud", "Via IMOU servers"]] as const).map(([value, Icon, title, desc]) => (
+                  <label key={value} className={cn("flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors",
+                    form.stream_type === value ? "border-primary/50 bg-primary/10" : "border-border hover:bg-accent/40")}>
+                    <input type="radio" name="stream_type" className="sr-only" checked={form.stream_type === value} onChange={() => set({ stream_type: value })} />
+                    <Icon className={cn("mt-0.5 h-4 w-4", form.stream_type === value ? "text-primary" : "text-muted-foreground")} />
+                    <span>
+                      <span className="block text-sm font-medium">{title}</span>
+                      <span className="block text-xs text-muted-foreground">{desc}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+
+            {form.stream_type === "imou" ? (
+              <div className="grid gap-4 sm:grid-cols-3">
+                <Field label="Device serial" required className="sm:col-span-2">
+                  <Input mono value={form.imou_device_id} onChange={(e) => set({ imou_device_id: e.target.value })} placeholder="AABHD12345678901" required />
+                </Field>
+                <Field label="Channel">
+                  <Input mono value={form.imou_channel_id} onChange={(e) => set({ imou_channel_id: e.target.value })} inputMode="numeric" />
+                </Field>
               </div>
             ) : (
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <FormField label="IP Address" value={form.ip} onChange={v => setForm(f => ({ ...f, ip: v }))} placeholder="192.168.1.100" required mono />
-                <FormField label="Port" value={form.port} onChange={v => setForm(f => ({ ...f, port: v }))} placeholder="554" mono />
-                <FormField label="Username" value={form.username} onChange={v => setForm(f => ({ ...f, username: v }))} placeholder="admin" required />
-                <FormField label="Password" value={form.password} onChange={v => setForm(f => ({ ...f, password: v }))} type="password" placeholder="••••••••" required />
-                <FormField label="Channel" value={form.channel} onChange={v => setForm(f => ({ ...f, channel: v }))} placeholder="1" mono />
-                <FormField label="Subtype (0=main, 1=sub)" value={form.subtype} onChange={v => setForm(f => ({ ...f, subtype: v }))} placeholder="0" mono />
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                <Field label="IP address" required className="col-span-2 sm:col-span-3">
+                  <Input mono value={form.ip} onChange={(e) => set({ ip: e.target.value })} placeholder="192.168.1.100" required inputMode="decimal" />
+                </Field>
+                <Field label="Port" className="col-span-2 sm:col-span-1">
+                  <Input mono value={form.port} onChange={(e) => set({ port: e.target.value })} inputMode="numeric" />
+                </Field>
+                <Field label="Username" required className="col-span-2">
+                  <Input value={form.username} onChange={(e) => set({ username: e.target.value })} autoComplete="off" required />
+                </Field>
+                <Field label="Password" required className="col-span-2">
+                  <Input type="password" value={form.password} onChange={(e) => set({ password: e.target.value })} autoComplete="new-password" required />
+                </Field>
+                <Field label="Channel">
+                  <Input mono value={form.channel} onChange={(e) => set({ channel: e.target.value })} inputMode="numeric" />
+                </Field>
+                <Field label="Stream">
+                  <Select value={form.subtype} onChange={(e) => set({ subtype: e.target.value })}>
+                    <option value="0">Main</option>
+                    <option value="1">Sub (lower bandwidth)</option>
+                  </Select>
+                </Field>
               </div>
             )}
 
-            <div className="flex items-center gap-3">
-              <Button type="submit" size="sm" disabled={saving}>
-                {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-1.5" />}
-                Add Camera
-              </Button>
-              {formErr && <p className="text-xs text-destructive">{formErr}</p>}
-            </div>
-          </form>
-        </div>
-      )}
-
-      {loading ? (
-        <div className="flex h-32 items-center justify-center gap-3 text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          <span className="text-sm">Loading cameras…</span>
-        </div>
-      ) : cameras.length === 0 ? (
-        <div className="rounded-lg border border-border py-12 text-center text-sm text-muted-foreground">
-          No cameras configured yet.
-        </div>
-      ) : (
-        <div className="rounded-lg border border-border overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/30">
-              <tr>
-                {['Site', 'Department', 'Label', 'Type', 'Connection', 'Channel'].map(h => (
-                  <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">{h}</th>
-                ))}
-                <th className="px-4 py-2.5 w-10" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {cameras.map(cam => {
-                const canDelete = isSuper || cam.site_department_id === currentDeptId
-                return (
-                <tr key={cam.id} className="hover:bg-muted/20 transition-colors">
-                  <td className="px-4 py-3">
-                    <div>
-                      <p className="text-xs font-medium text-foreground">{cam.site_label}</p>
-                      <p className="text-[10px] font-mono text-muted-foreground">{cam.site_id}</p>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <Badge variant="info" className="text-[10px] font-mono">{cam.site_department_code}</Badge>
-                  </td>
-                  <td className="px-4 py-3 text-foreground text-xs">{cam.label}</td>
-                  <td className="px-4 py-3">
-                    <Badge variant={cam.stream_type === 'imou' ? 'success' : 'info'} className="text-[10px]">
-                      {cam.stream_type === 'imou' ? 'IMOU CLOUD' : 'RTSP'}
-                    </Badge>
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
-                    {cam.stream_type === 'imou'
-                      ? cam.imou_device_id
-                      : `${cam.ip}:${cam.port}`
-                    }
-                  </td>
-                  <td className="px-4 py-3 text-xs text-muted-foreground">
-                    {cam.stream_type === 'imou'
-                      ? `ch${cam.imou_channel_id}`
-                      : `ch${cam.channel} / sub${cam.subtype}`
-                    }
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    {canDelete && (
-                      <button
-                        onClick={() => del(cam.id)}
-                        disabled={deleting === cam.id}
-                        className="text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
-                      >
-                        {deleting === cam.id
-                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          : <Trash2 className="h-3.5 w-3.5" />}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
+            {error && <p role="alert" className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>}
+          </DialogBody>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={close}>Cancel</Button>
+            <Button type="submit" loading={saving}>Add camera</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }

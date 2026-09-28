@@ -1,6 +1,7 @@
-import { Navigate } from "react-router-dom"
+import { Navigate, useLocation } from "react-router-dom"
 import { useAuth } from "@/contexts/AuthContext"
 import type { Role } from "@/types/access"
+import { SplashScreen } from "./SplashScreen"
 
 export default function ProtectedRoute({
   children,
@@ -10,19 +11,11 @@ export default function ProtectedRoute({
   allowedRoles?: Role[]
 }) {
   const { user, loading } = useAuth()
+  const location = useLocation()
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-8 w-8 rounded-full border-2 border-primary/20 border-t-primary animate-spin" />
-          <span className="text-xs text-muted-foreground">Loading…</span>
-        </div>
-      </div>
-    )
-  }
-
-  if (!user) return <Navigate to="/login" replace />
+  if (loading) return <SplashScreen />
+  // Remember where the user was headed so login can send them back
+  if (!user) return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />
   if (allowedRoles && !allowedRoles.includes(user.role)) return <Navigate to="/" replace />
 
   return <>{children}</>

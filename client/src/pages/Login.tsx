@@ -1,212 +1,172 @@
 import { useState, type FormEvent } from "react"
-import { useNavigate } from "react-router-dom"
+import { Navigate, useLocation, useNavigate } from "react-router-dom"
 import { useAuth } from "@/contexts/AuthContext"
 import {
-  AlertTriangle, Eye, EyeOff, Lock, Mail, Shield,
-  Satellite, Radio, Camera,
+  Eye, EyeOff, Lock, Mail, ShieldCheck, Siren, Satellite, Camera, Radio, CircleAlert, ArrowRight,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
-import logoSrc from "@/images/Logo.png"
+import { Input, Field } from "@/components/ui/input"
+import { usePageTitle } from "@/hooks/usePageTitle"
+import logoFull from "@/images/logo-full.png"
+import logoMark from "@/images/logo-mark.png"
 
-const FEATURES = [
-  { icon: AlertTriangle, label: "Instant Panic Alerts",    desc: "Real-time emergency dispatch to QRF units" },
-  { icon: Satellite,     label: "Live GPS Tracking",       desc: "Continuous location monitoring across all sites" },
-  { icon: Camera,        label: "RTSP Camera Feeds",       desc: "Live surveillance from on-site cameras" },
-  { icon: Radio,         label: "HQ Receiver Network",     desc: "Automated buzzer dispatch to LEA headquarters" },
+const CAPABILITIES = [
+  { icon: Siren,     label: "Instant panic alerts",  desc: "Sub-second dispatch to routed QRF and LEA headquarters" },
+  { icon: Satellite, label: "Live GPS tracking",     desc: "Cellular and satellite positions for trains and mines" },
+  { icon: Camera,    label: "On-site camera feeds",  desc: "RTSP and cloud video, one click from any alert" },
+  { icon: Radio,     label: "HQ receiver network",   desc: "Department-scoped routing to buzzer receivers" },
 ]
 
 export default function Login() {
-  const { login }   = useAuth()
-  const navigate    = useNavigate()
+  usePageTitle("Sign in")
+  const { login, user, loading: authLoading } = useAuth()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const from = (location.state as { from?: string } | null)?.from ?? "/"
 
   const [email, setEmail]               = useState("")
   const [password, setPassword]         = useState("")
   const [showPassword, setShowPassword] = useState(false)
+  const [capsLock, setCapsLock]         = useState(false)
   const [error, setError]               = useState("")
-  const [loading, setLoading]           = useState(false)
+  const [submitting, setSubmitting]     = useState(false)
+
+  if (!authLoading && user) return <Navigate to={from} replace />
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     setError("")
-    setLoading(true)
+    setSubmitting(true)
     try {
       await login(email, password)
-      navigate("/", { replace: true })
+      navigate(from, { replace: true })
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed")
-    } finally {
-      setLoading(false)
+      setError(err instanceof Error ? err.message : "Sign-in failed")
+      setSubmitting(false)
     }
   }
 
+  const detectCaps = (e: React.KeyboardEvent) => setCapsLock(e.getModifierState?.("CapsLock") ?? false)
+
   return (
-    <div className="min-h-screen w-screen flex">
+    <div className="relative flex min-h-dvh overflow-hidden bg-background">
+      {/* Backdrop */}
+      <div className="pointer-events-none absolute inset-0 bg-grid [mask-image:radial-gradient(ellipse_at_30%_40%,black,transparent_75%)]" aria-hidden />
+      <div className="pointer-events-none absolute -left-40 top-1/4 h-[36rem] w-[36rem] rounded-full bg-primary/15 blur-[120px]" aria-hidden />
+      <div className="pointer-events-none absolute -bottom-40 right-0 h-[28rem] w-[28rem] rounded-full bg-primary/10 blur-[120px]" aria-hidden />
 
-      {/* ── Left panel — branding ─────────────────────────────────── */}
-      <div className="hidden lg:flex lg:w-1/2 xl:w-[55%] flex-col relative bg-card border-r border-border overflow-hidden">
-
-        {/* Subtle grid background */}
-        <div
-          className="absolute inset-0 opacity-[0.04]"
-          style={{
-            backgroundImage:
-              "linear-gradient(hsl(var(--border)) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--border)) 1px, transparent 1px)",
-            backgroundSize: "48px 48px",
-          }}
-        />
-
-        {/* Radial glow behind logo */}
-        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 h-96 w-96 rounded-full bg-primary/5 blur-3xl pointer-events-none" />
-
-        <div className="relative flex flex-col h-full px-12 py-10">
-
-          {/* Logo + name */}
-          <div className="flex flex-col items-center text-center flex-1 justify-center gap-6">
-            <img
-              src={logoSrc}
-              alt="Falcon Eye"
-              className="h-64 w-auto object-contain drop-shadow-[0_0_32px_rgba(59,130,246,0.25)]"
-            />
-
-            
-
-            {/* Divider */}
-            <div className="flex items-center gap-3 w-full max-w-xs">
-              <div className="flex-1 h-px bg-border" />
-              <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Capabilities</span>
-              <div className="flex-1 h-px bg-border" />
-            </div>
-
-            {/* Feature list */}
-            <ul className="w-full max-w-xs space-y-3">
-              {FEATURES.map(({ icon: Icon, label, desc }) => (
-                <li key={label} className="flex items-start gap-3">
-                  <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary/10 border border-primary/20">
-                    <Icon className="h-3.5 w-3.5 text-primary" />
-                  </div>
-                  <div className="text-left">
-                    <p className="text-xs font-semibold text-foreground">{label}</p>
-                    <p className="text-[11px] text-muted-foreground leading-relaxed">{desc}</p>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          {/* Footer */}
-          <div className="flex items-center justify-between pt-6 border-t border-border">
-            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-              <Shield className="h-3.5 w-3.5 text-primary" />
-              <span>NACTA/NIFTAC</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-[10px] text-muted-foreground">System Online</span>
-            </div>
+      {/* ── Brand panel (lg+) ─────────────────────────────────────── */}
+      <section className="relative hidden flex-1 flex-col justify-between p-12 lg:flex xl:p-16">
+        <div className="flex items-center gap-3">
+          <img src={logoMark} alt="" className="h-10 w-10 rounded-lg ring-1 ring-primary/30" />
+          <div className="leading-tight">
+            <p className="text-sm font-bold tracking-[0.2em]">FALCON EYE</p>
+            <p className="text-xs text-muted-foreground">NACTA · NIFTAC</p>
           </div>
         </div>
-      </div>
 
-      {/* ── Right panel — form ────────────────────────────────────── */}
-      <div className="flex w-full lg:w-1/2 xl:w-[45%] flex-col items-center justify-center bg-background px-6 py-12 relative">
+        <div className="max-w-xl">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">Emergency alert & situational awareness</p>
+          <h1 className="mt-4 text-4xl font-bold leading-[1.1] tracking-tight xl:text-5xl">
+            Every alert, every site,
+            <span className="block bg-gradient-to-r from-primary to-info bg-clip-text text-transparent">in one command view.</span>
+          </h1>
+          <p className="mt-5 max-w-md text-base text-muted-foreground">
+            Real-time monitoring for Pakistan Railways trains and remote mining sites, shared securely across partner departments.
+          </p>
 
-        {/* Mobile-only logo */}
-        <div className="flex flex-col items-center mb-8 lg:hidden">
-          <img src={logoSrc} alt="Falcon Eye" className="h-20 w-auto object-contain mb-3" />
-          <p className="text-xs text-muted-foreground uppercase tracking-widest">Emergency Alert System</p>
+          <ul className="mt-10 grid grid-cols-2 gap-4">
+            {CAPABILITIES.map(({ icon: Icon, label, desc }) => (
+              <li key={label} className="rounded-xl border border-border bg-card/40 p-4 backdrop-blur-sm">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-primary/25 bg-primary/10 text-primary">
+                  <Icon className="h-4 w-4" />
+                </div>
+                <p className="mt-3 text-sm font-semibold">{label}</p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{desc}</p>
+              </li>
+            ))}
+          </ul>
         </div>
 
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <ShieldCheck className="h-4 w-4 text-success" />
+          Restricted system — authorised personnel only. Administrative actions are audited.
+        </div>
+      </section>
+
+      {/* ── Sign-in panel ─────────────────────────────────────────── */}
+      <section className="relative flex w-full flex-col items-center justify-center px-5 py-10 lg:w-[480px] lg:shrink-0 lg:border-l lg:border-border lg:bg-card/50 lg:backdrop-blur-xl xl:w-[540px]">
         <div className="w-full max-w-sm">
+          <img src={logoFull} alt="Falcon Eye" className="mx-auto mb-6 h-40 w-40 rounded-3xl object-cover shadow-glow-primary lg:h-44 lg:w-44" />
 
-          {/* Form header */}
-          <div className="mb-8">
-            <h2 className="text-2xl font-bold text-foreground">Sign In</h2>
-            <p className="text-sm text-muted-foreground mt-1">
-              Access restricted to authorised personnel only
-            </p>
+          <div className="mb-7 text-center">
+            <h2 className="text-2xl font-semibold tracking-tight">Welcome back</h2>
+            <p className="mt-1.5 text-sm text-muted-foreground">Sign in with your department account</p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <Field label="Email address">
+              <Input
+                type="email"
+                icon={Mail}
+                autoComplete="username"
+                inputMode="email"
+                autoFocus
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="name@department.gov.pk"
+                required
+                className="h-11 sm:h-11"
+              />
+            </Field>
 
-            {/* Email */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                Email Address
-              </label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <input
-                  type="email"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  placeholder="user@nacta.gov.pk"
-                  required
-                  className={cn(
-                    "w-full rounded-md border bg-input/30 pl-10 pr-4 py-2.5 text-sm text-foreground",
-                    "placeholder:text-muted-foreground/50 border-input",
-                    "focus:outline-none focus:ring-2 focus:ring-ring focus:border-primary transition-colors"
-                  )}
-                />
-              </div>
-            </div>
+            <Field label="Password" hint={capsLock ? <span className="text-warning">Caps Lock is on</span> : undefined}>
+              <Input
+                type={showPassword ? "text" : "password"}
+                icon={Lock}
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={detectCaps}
+                onKeyUp={detectCaps}
+                placeholder="••••••••"
+                required
+                className="h-11 sm:h-11"
+                trailing={
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((p) => !p)}
+                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    aria-pressed={showPassword}
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                }
+              />
+            </Field>
 
-            {/* Password */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                Password
-              </label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <input
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  required
-                  className={cn(
-                    "w-full rounded-md border bg-input/30 pl-10 pr-10 py-2.5 text-sm text-foreground",
-                    "placeholder:text-muted-foreground/50 border-input",
-                    "focus:outline-none focus:ring-2 focus:ring-ring focus:border-primary transition-colors"
-                  )}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(p => !p)}
-                  tabIndex={-1}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
-            </div>
-
-            {/* Error */}
             {error && (
-              <div className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2.5">
-                <AlertTriangle className="h-4 w-4 text-destructive shrink-0" />
-                <p className="text-xs text-destructive">{error}</p>
+              <div role="alert" className="flex items-start gap-2.5 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2.5 text-sm text-danger animate-in fade-in-0 slide-in-from-top-1">
+                <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                {error}
               </div>
             )}
 
-            <Button type="submit" className="w-full h-10" disabled={loading}>
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <span className="h-3.5 w-3.5 rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground animate-spin" />
-                  Authenticating…
-                </span>
-              ) : "Sign In"}
+            <Button type="submit" size="lg" className="w-full" loading={submitting}>
+              {submitting ? "Signing in…" : <>Sign in <ArrowRight /></>}
             </Button>
           </form>
 
-          {/* Mobile footer */}
-          <div className="flex items-center justify-center gap-2 mt-8 text-[11px] text-muted-foreground lg:hidden">
-            <Shield className="h-3 w-3" />
-            <span>NACTA · National Counter Terrorism Authority</span>
-          </div>
+          <p className="mt-6 text-center text-xs text-muted-foreground">
+            Forgot your password? Contact your department administrator.
+          </p>
+          <p className="mt-6 flex items-center justify-center gap-1.5 text-xs text-muted-foreground lg:hidden">
+            <ShieldCheck className="h-3.5 w-3.5 text-success" />
+            Authorised personnel only · NACTA
+          </p>
         </div>
-      </div>
-
+      </section>
     </div>
   )
 }

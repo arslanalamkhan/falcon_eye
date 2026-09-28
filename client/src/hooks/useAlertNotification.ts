@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo } from "react"
 import { ref, onValue } from "firebase/database"
 import { db } from "@/lib/firebase"
 import { useAuth } from "@/contexts/AuthContext"
@@ -6,6 +6,7 @@ import { useAuth } from "@/contexts/AuthContext"
 export type AlertEvent = {
   siteId:     string
   siteLabel:  string
+  department?: string
   lat?:       string
   lng?:       string
   gpsStatus?: string
@@ -13,56 +14,71 @@ export type AlertEvent = {
   triggeredAt: string
 }
 
+/**
+ * Watches visible sites for panic alerts.
+ * - `activeAlerts`: every visible site currently in alert (drives the bell,
+ *   nav badges and the tab title).
+ * - `activeAlert` / `dismiss`: a queue of *newly seen* alerts for the
+ *   full-screen popup — each alert cycle pops up once per session.
+ */
 export function useAlertNotification() {
-  const [queue, setQueue]       = useState<AlertEvent[]>([])
-  // Tracks sites whose current alert cycle we've already notified about
+  const [queue, setQueue]               = useState<AlertEvent[]>([])
+  const [activeAlerts, setActiveAlerts] = useState<AlertEvent[]>([])
+  // Sites whose current alert cycle we've already queued a popup for
   const notified = useRef<Set<string>>(new Set())
   const { access } = useAuth()
 
+  const siteMeta = useMemo(() => {
+    const map = new Map<string, { label: string; department: string }>()
+    for (const s of access?.sites ?? []) map.set(s.id, { label: s.label, department: s.department_code })
+    return map
+  }, [access])
+
   useEffect(() => {
-    // Access hasn't loaded yet — wait rather than notifying on sites we
-    // might not actually be allowed to see.
+    // Wait for access rather than notifying on sites we may not be allowed to see
     if (!access) return
+    const isVisible = access.allSites ? () => true : (id: string) => siteMeta.has(id)
 
-    const isVisible = access.allSites
-      ? () => true
-      : (() => { const set = new Set(access.siteIds ?? []); return (id: string) => set.has(id) })()
-
-    const sitesRef = ref(db, 'sites')
-    return onValue(sitesRef, (snap) => {
-      if (!snap.exists()) return
+    return onValue(ref(db, "sites"), (snap) => {
+      const nowActive: AlertEvent[] = []
+      const fresh: AlertEvent[] = []
 
       snap.forEach((child) => {
         const id = child.key as string
         if (!isVisible(id)) return
-
         const site = child.val()
-        const isAlert = site.alert === 'true'
-
-        if (isAlert && !notified.current.has(id)) {
-          // New alert (first-load existing OR live transition)
-          notified.current.add(id)
-          const event: AlertEvent = {
-            siteId:      id,
-            siteLabel:   site.label  ?? id,
-            lat:         site.gps?.lat,
-            lng:         site.gps?.lng,
-            gpsStatus:   site.gps?.status,
-            speed:       site.gps?.speed_kmh,
-            triggeredAt: new Date().toISOString(),
-          }
-          setQueue(prev => [...prev, event])
-        }
-
-        if (!isAlert) {
-          // Alert cleared — allow future alerts on this site to trigger again
+        if (site?.alert !== "true") {
+          // Alert cleared — allow a future alert on this site to pop up again
           notified.current.delete(id)
+          return
+        }
+        const meta = siteMeta.get(id)
+        const event: AlertEvent = {
+          siteId:      id,
+          siteLabel:   meta?.label ?? site.label ?? id,
+          department:  meta?.department,
+          lat:         site.gps?.lat,
+          lng:         site.gps?.lng,
+          gpsStatus:   site.gps?.status,
+          speed:       site.gps?.speed_kmh,
+          triggeredAt: site.last_alert || new Date().toISOString(),
+        }
+        nowActive.push(event)
+        if (!notified.current.has(id)) {
+          notified.current.add(id)
+          fresh.push(event)
         }
       })
+
+      nowActive.sort((a, b) => b.triggeredAt.localeCompare(a.triggeredAt))
+      setActiveAlerts(nowActive)
+      if (fresh.length) setQueue((prev) => [...prev, ...fresh])
+      // Drop queued popups for alerts that have since been reset at the receiver
+      setQueue((prev) => prev.filter((q) => nowActive.some((a) => a.siteId === q.siteId)))
     })
-  }, [access])
+  }, [access, siteMeta])
 
-  const dismiss = () => setQueue(prev => prev.slice(1))
+  const dismiss = () => setQueue((prev) => prev.slice(1))
 
-  return { activeAlert: queue[0] ?? null, queueLength: queue.length, dismiss }
+  return { activeAlert: queue[0] ?? null, queueLength: queue.length, dismiss, activeAlerts }
 }

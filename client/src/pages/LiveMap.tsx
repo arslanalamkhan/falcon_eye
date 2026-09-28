@@ -1,344 +1,169 @@
-import { useEffect, useState, useMemo } from "react"
-import { MapContainer, TileLayer, LayersControl, Marker, Popup, useMap } from "react-leaflet"
-import { useNavigate } from "react-router-dom"
-import L from "leaflet"
-import "leaflet/dist/leaflet.css"
-import { Badge } from "@/components/ui/badge"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { useSearchParams } from "react-router-dom"
+import { MapContainer, TileLayer, LayersControl, ZoomControl } from "react-leaflet"
+import { ChevronUp, PanelLeftClose, PanelLeftOpen, MapPinned } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { MapPin, Satellite, Clock, Gauge, Loader2, Camera } from "lucide-react"
-import { useFirebaseData, type SiteData } from "@/hooks/useFirebaseData"
+import { Button } from "@/components/ui/button"
+import { Tip } from "@/components/ui/tooltip"
+import { useFirebaseData } from "@/hooks/useFirebaseData"
+import { usePageTitle } from "@/hooks/usePageTitle"
+import { usePersistentState } from "@/hooks/usePersistentState"
+import { useMediaQuery } from "@/hooks/useMediaQuery"
+import { SiteMarkers } from "@/components/map/SiteMarkers"
+import { MapController, type FocusRequest } from "@/components/map/MapController"
+import { SitePanel } from "@/components/map/SitePanel"
+import { hasCoords, sitesSummary } from "@/lib/sites"
 
-// ── Custom marker icon using inline SVG / div ────────────────────
-function createMarkerIcon(isAlert: boolean) {
-  const color   = isAlert ? "#ef4444" : "#10b981"
-  const outline = isAlert ? "rgba(239,68,68,0.35)" : "transparent"
-  const pulse   = isAlert
-    ? `<div style="position:absolute;inset:-7px;border-radius:9999px;background:${outline};animation:map-ping 1.5s cubic-bezier(0,0,0.2,1) infinite;"></div>`
-    : ""
-  return L.divIcon({
-    className: "",
-    html: `
-      <div style="position:relative;width:18px;height:18px;">
-        ${pulse}
-        <div style="
-          position:absolute;inset:0;
-          border-radius:9999px;
-          background:${color};
-          border:2.5px solid white;
-          box-shadow:0 0 0 1px rgba(0,0,0,0.25), 0 2px 8px rgba(0,0,0,0.5);
-        "></div>
-      </div>`,
-    iconSize:    [18, 18],
-    iconAnchor:  [9, 9],
-    popupAnchor: [0, -12],
-  })
-}
+const PAKISTAN_CENTER: [number, number] = [30.3753, 69.3451]
 
-// ── Helpers ──────────────────────────────────────────────────────
-function timeAgo(iso?: string): string {
-  if (!iso) return "—"
-  const diff = Date.now() - new Date(iso).getTime()
-  const mins = Math.floor(diff / 60000)
-  if (mins < 1) return "just now"
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  return `${hrs}h ${mins % 60}m ago`
-}
-
-function fmtCoord(v: string, dir: "N" | "E") {
-  return `${parseFloat(v).toFixed(5)}° ${dir}`
-}
-
-// ── Auto-fit map to sites on first load ──────────────────────────
-function MapAutoFit({ sites }: { sites: SiteData[] }) {
-  const map = useMap()
-
-  useEffect(() => {
-    const valid = sites.filter(s => s.gps?.lat && s.gps?.lng)
-    if (valid.length === 0) return
-
-    if (valid.length === 1) {
-      map.setView(
-        [parseFloat(valid[0].gps.lat), parseFloat(valid[0].gps.lng)],
-        9,
-        { animate: true }
-      )
-      return
-    }
-
-    const bounds = L.latLngBounds(
-      valid.map(s => [parseFloat(s.gps.lat), parseFloat(s.gps.lng)] as [number, number])
-    )
-    map.fitBounds(bounds, { padding: [60, 60], animate: true })
-  }, [sites.length, map])
-
-  return null
-}
-
-// ── Main component ───────────────────────────────────────────────
 export default function LiveMap() {
-  const { sites: allSites, activeAlertCount, departmentCodes } = useFirebaseData()
-  const navigate = useNavigate()
-  const [deptFilter, setDeptFilter] = useState<string | null>(null)
+  usePageTitle("Live Map")
+  const { sites, departmentCodes, sitesLoaded } = useFirebaseData()
+  const [params, setParams] = useSearchParams()
+  const selectedId = params.get("site")
+  const isDesktop = useMediaQuery("(min-width: 768px)")
 
-  const sites = useMemo(
-    () => deptFilter ? allSites.filter(s => s.department_code === deptFilter) : allSites,
-    [allSites, deptFilter]
+  const [dept, setDept]               = useState<string | null>(null)
+  const [query, setQuery]             = useState("")
+  const [panelOpen, setPanelOpen]     = usePersistentState("fe.map.panelOpen", true)
+  const [sheetOpen, setSheetOpen]     = useState(false)
+  const [fitNonce, setFitNonce]       = useState(0)
+  // Fly-to requests. Seeded from ?site= so alert/bell/search links land on the site.
+  const [focus, setFocus]             = useState<FocusRequest | null>(() => (selectedId ? { id: selectedId, nonce: 1 } : null))
+  const fromMarkerClick               = useRef<string | null>(null)
+
+  // Follow ?site= changes made from outside the map (bell, command palette)
+  useEffect(() => {
+    if (!selectedId) return
+    if (fromMarkerClick.current === selectedId) { fromMarkerClick.current = null; return }
+    setFocus((f) => (f?.id === selectedId ? f : { id: selectedId, nonce: (f?.nonce ?? 0) + 1 }))
+  }, [selectedId])
+
+  const deptSites = useMemo(() => (dept ? sites.filter((s) => s.department_code === dept) : sites), [sites, dept])
+  const located = useMemo(() => deptSites.filter(hasCoords), [deptSites])
+  const alertCount = deptSites.filter((s) => s.alert).length
+
+  // From the list: always fly, even when re-selecting the current site
+  const select = (id: string) => {
+    setParams({ site: id }, { replace: true })
+    setFocus((f) => ({ id, nonce: (f?.nonce ?? 0) + 1 }))
+    setSheetOpen(false)
+  }
+
+  // From a marker: just select (the popup opens in place) — no jarring zoom
+  const selectFromMarker = (id: string) => {
+    fromMarkerClick.current = id
+    setParams({ site: id }, { replace: true })
+  }
+
+  // Keep fly-to targets clear of the floating panel (desktop) or bottom sheet (mobile)
+  const padding = isDesktop
+    ? { topLeft: [panelOpen ? 368 : 32, 32] as [number, number], bottomRight: [32, 32] as [number, number] }
+    : { topLeft: [24, 24] as [number, number], bottomRight: [24, 96] as [number, number] }
+
+  const panel = (
+    <SitePanel
+      sites={deptSites}
+      selectedId={selectedId}
+      onSelect={select}
+      query={query}
+      onQueryChange={setQuery}
+      dept={dept}
+      onDeptChange={setDept}
+      departmentCodes={departmentCodes}
+      onFitAll={() => { setParams({}, { replace: true }); setFocus(null); setFitNonce((n) => n + 1) }}
+      loading={!sitesLoaded}
+      className="flex-1"
+    />
   )
 
   return (
-    <div className="flex flex-col gap-4" style={{ height: "calc(100vh - 6.5rem)" }}>
+    <div className="relative h-full w-full">
+      <MapContainer center={PAKISTAN_CENTER} zoom={5} zoomControl={false} className="z-0 h-full w-full" worldCopyJump>
+        <LayersControl position="topright">
+          <LayersControl.BaseLayer checked name="Satellite">
+            <TileLayer
+              url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+              attribution='Tiles &copy; <a href="https://www.esri.com" target="_blank" rel="noreferrer">Esri</a> — Esri, Maxar, Earthstar Geographics'
+              maxZoom={19}
+            />
+          </LayersControl.BaseLayer>
+          <LayersControl.BaseLayer name="Dark">
+            <TileLayer
+              url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+              attribution='Tiles &copy; <a href="https://www.esri.com" target="_blank" rel="noreferrer">Esri</a> — Esri, HERE, Garmin, FAO, NOAA, USGS'
+              maxZoom={16}
+              maxNativeZoom={16}
+            />
+          </LayersControl.BaseLayer>
+          <LayersControl.Overlay checked name="Place labels">
+            <TileLayer
+              url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
+              attribution=""
+              maxZoom={19}
+            />
+          </LayersControl.Overlay>
+        </LayersControl>
+        <ZoomControl position="topright" />
+        <MapController sites={located} focus={focus} fitNonce={fitNonce} padding={padding} />
+        <SiteMarkers sites={located} selectedId={selectedId} onSelect={selectFromMarker} />
+      </MapContainer>
 
-      {/* Page header */}
-      <div className="flex items-center justify-between shrink-0">
-        <div>
-          <h1 className="text-xl font-bold text-foreground">Live Map</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Real-time GPS tracking across all active sites
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {activeAlertCount > 0 && (
-            <Badge variant="danger" className="animate-pulse">
-              {activeAlertCount} Active Alert{activeAlertCount !== 1 ? "s" : ""}
-            </Badge>
-          )}
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-            {sites.length} site{sites.length !== 1 ? "s" : ""} tracked
+      {/* ── Desktop floating panel ─────────────────────────────── */}
+      {panelOpen ? (
+        <aside className="absolute bottom-4 left-4 top-4 z-10 hidden w-80 flex-col overflow-hidden rounded-xl border border-border bg-popover/90 shadow-pop backdrop-blur-xl md:flex">
+          <div className="flex items-center gap-3 border-b border-border px-4 py-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/15 text-primary">
+              <MapPinned className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h1 className="text-sm font-semibold">Live Map</h1>
+              <p className={cn("text-xs", alertCount ? "font-medium text-danger" : "text-muted-foreground")}>{sitesSummary(deptSites)}</p>
+            </div>
+            <Tip content="Hide panel">
+              <Button variant="ghost" size="icon-sm" onClick={() => setPanelOpen(false)} aria-label="Hide site panel">
+                <PanelLeftClose />
+              </Button>
+            </Tip>
           </div>
-        </div>
-      </div>
-
-      {/* Department filter — only shown when visible sites span more than one department */}
-      {departmentCodes.length > 1 && (
-        <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            onClick={() => setDeptFilter(null)}
-            className={cn(
-              "rounded-full border px-2.5 py-1 text-[11px] transition-colors",
-              !deptFilter ? "border-primary bg-primary/15 text-primary" : "border-border text-muted-foreground hover:text-foreground"
-            )}
-          >
-            All Departments
-          </button>
-          {departmentCodes.map(code => (
-            <button
-              key={code}
-              onClick={() => setDeptFilter(code)}
-              className={cn(
-                "rounded-full border px-2.5 py-1 text-[11px] font-mono transition-colors",
-                deptFilter === code ? "border-primary bg-primary/15 text-primary" : "border-border text-muted-foreground hover:text-foreground"
-              )}
-            >
-              {code}
-            </button>
-          ))}
-        </div>
+          {panel}
+        </aside>
+      ) : (
+        <Button
+          variant="outline"
+          onClick={() => setPanelOpen(true)}
+          className="absolute left-4 top-4 z-10 hidden bg-popover/90 shadow-pop backdrop-blur-xl md:inline-flex"
+        >
+          <PanelLeftOpen /> Sites
+          <span className={cn("rounded-full px-1.5 font-mono text-2xs", alertCount ? "bg-danger text-danger-foreground" : "bg-muted")}>
+            {alertCount || deptSites.length}
+          </span>
+        </Button>
       )}
 
-      {/* Map + sidebar */}
-      <div className="grid grid-cols-1 xl:grid-cols-4 gap-4 flex-1 min-h-0">
-
-        {/* Map */}
-        <div className="xl:col-span-3 rounded-lg overflow-hidden border border-border">
-          <MapContainer
-            center={[30.3753, 69.3451]}
-            zoom={5}
-            style={{ height: "100%", width: "100%" }}
-            zoomControl
+      {/* ── Mobile bottom sheet ────────────────────────────────── */}
+      <div className="absolute inset-x-2 bottom-2 z-10 md:hidden">
+        <div className="flex max-h-[62dvh] flex-col overflow-hidden rounded-2xl border border-border bg-popover/95 shadow-pop backdrop-blur-xl">
+          <button
+            type="button"
+            onClick={() => setSheetOpen((o) => !o)}
+            className="flex shrink-0 flex-col items-center gap-2 px-4 pb-3 pt-2"
+            aria-expanded={sheetOpen}
+            aria-controls="map-sheet"
           >
-            <LayersControl position="topright">
-              <LayersControl.BaseLayer checked name="Satellite">
-                <TileLayer
-                  url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                  attribution='Tiles &copy; <a href="https://www.esri.com" target="_blank">Esri</a> — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
-                  maxZoom={19}
-                />
-              </LayersControl.BaseLayer>
-
-              <LayersControl.BaseLayer name="Dark">
-                <TileLayer
-                  url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
-                  attribution='Tiles &copy; <a href="https://www.esri.com" target="_blank">Esri</a> — Esri, HERE, Garmin, FAO, NOAA, USGS'
-                  maxZoom={16}
-                  maxNativeZoom={16}
-                />
-              </LayersControl.BaseLayer>
-
-              <LayersControl.Overlay checked name="Place labels">
-                <TileLayer
-                  url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
-                  attribution=""
-                  maxZoom={19}
-                />
-              </LayersControl.Overlay>
-            </LayersControl>
-
-            <MapAutoFit sites={sites} />
-
-            {sites.map((site) => {
-              const lat = parseFloat(site.gps?.lat ?? "")
-              const lng = parseFloat(site.gps?.lng ?? "")
-              if (isNaN(lat) || isNaN(lng)) return null
-
-              return (
-                <Marker
-                  key={site.id}
-                  position={[lat, lng]}
-                  icon={createMarkerIcon(site.alert)}
-                >
-                  <Popup minWidth={220}>
-                    <div className="space-y-2.5">
-
-                      {/* Title row */}
-                      <div className="flex items-start justify-between gap-2">
-                        <span className="text-sm font-semibold text-foreground leading-tight">
-                          {site.label}
-                        </span>
-                        <Badge
-                          variant={site.alert ? "danger" : "success"}
-                          className="text-[10px] shrink-0"
-                        >
-                          {site.alert ? "ALERT" : "Standby"}
-                        </Badge>
-                      </div>
-
-                      {/* Details */}
-                      <div className="space-y-1.5 text-[11px] text-muted-foreground">
-                        <div className="flex items-center gap-1.5">
-                          <Satellite className="h-3 w-3 shrink-0" />
-                          GPS status:&nbsp;
-                          <span className={
-                            site.gps?.status === "live"
-                              ? "text-emerald-400 font-medium"
-                              : "text-amber-400 font-medium"
-                          }>
-                            {site.gps?.status ?? "unknown"}
-                          </span>
-                        </div>
-
-                        <div className="flex items-center gap-1.5">
-                          <MapPin className="h-3 w-3 shrink-0" />
-                          {fmtCoord(site.gps?.lat ?? "0", "N")},&nbsp;
-                          {fmtCoord(site.gps?.lng ?? "0", "E")}
-                        </div>
-
-                        {site.gps?.speed_kmh && parseFloat(site.gps.speed_kmh) > 0 && (
-                          <div className="flex items-center gap-1.5">
-                            <Gauge className="h-3 w-3 shrink-0" />
-                            {parseFloat(site.gps.speed_kmh).toFixed(0)} km/h
-                          </div>
-                        )}
-
-                        <div className="flex items-center gap-1.5">
-                          <Clock className="h-3 w-3 shrink-0" />
-                          GPS updated {timeAgo(site.gps?.updated)}
-                        </div>
-                      </div>
-
-                      {/* Site ID chip + cameras link */}
-                      <div className="flex items-center justify-between gap-2 flex-wrap">
-                        <p className="text-[10px] font-mono text-muted-foreground border border-border rounded px-1.5 py-0.5">
-                          {site.id}
-                        </p>
-                        <button
-                          onClick={() => navigate(`/cameras?site=${site.id}`)}
-                          className="flex items-center gap-1 text-[10px] text-primary hover:text-primary/80 transition-colors font-medium"
-                        >
-                          <Camera className="h-3 w-3" />
-                          View Cameras
-                        </button>
-                      </div>
-                    </div>
-                  </Popup>
-                </Marker>
-              )
-            })}
-          </MapContainer>
+            <span className="h-1 w-10 rounded-full bg-muted-foreground/30" aria-hidden />
+            <span className="flex w-full items-center gap-3">
+              <MapPinned className="h-4 w-4 text-primary" />
+              <span className={cn("flex-1 text-left text-sm font-medium", alertCount && "text-danger")}>{sitesSummary(deptSites)}</span>
+              <ChevronUp className={cn("h-4 w-4 text-muted-foreground transition-transform", sheetOpen && "rotate-180")} />
+            </span>
+          </button>
+          {sheetOpen && (
+            <div id="map-sheet" className="flex min-h-0 flex-1 flex-col border-t border-border animate-in fade-in-0 slide-in-from-bottom-2">
+              {panel}
+            </div>
+          )}
         </div>
-
-        {/* Site list panel */}
-        <div className="rounded-lg border border-border bg-card flex flex-col min-h-0">
-
-          {/* Panel header */}
-          <div className="px-4 py-3 border-b border-border shrink-0">
-            <div className="flex items-center gap-2">
-              <MapPin className="h-4 w-4 text-primary" />
-              <span className="text-sm font-semibold text-foreground">Sites</span>
-              <span className="ml-auto text-[10px] text-muted-foreground">
-                {sites.length} total
-              </span>
-            </div>
-          </div>
-
-          {/* Site rows */}
-          <div className="flex-1 overflow-y-auto divide-y divide-border min-h-0">
-            {sites.length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-2 h-24 text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span className="text-xs">Connecting…</span>
-              </div>
-            ) : (
-              sites.map((site) => (
-                <div
-                  key={site.id}
-                  className="px-4 py-3 hover:bg-muted/30 transition-colors"
-                >
-                  <div className="flex items-start gap-2.5">
-                    <div className={`mt-1 h-2 w-2 shrink-0 rounded-full ${
-                      site.alert ? "bg-red-400 animate-pulse" : "bg-emerald-400"
-                    }`} />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-medium text-foreground truncate">
-                        {site.label}
-                      </p>
-                      <p className="text-[10px] font-mono text-muted-foreground mt-0.5">
-                        {site.id}
-                      </p>
-                      <div className="flex items-center justify-between mt-1">
-                        <span className={`text-[10px] ${
-                          site.gps?.status === "live"
-                            ? "text-emerald-400"
-                            : "text-amber-400"
-                        }`}>
-                          GPS {site.gps?.status ?? "—"}
-                        </span>
-                        <button
-                          onClick={() => navigate(`/cameras?site=${site.id}`)}
-                          className="flex items-center gap-1 text-[10px] text-primary hover:text-primary/80 transition-colors"
-                        >
-                          <Camera className="h-2.5 w-2.5" />
-                          Cameras
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-
-          {/* Legend */}
-          <div className="px-4 py-3 border-t border-border shrink-0 space-y-1.5">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-2">
-              Legend
-            </p>
-            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-              <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-400" />
-              Standby
-            </div>
-            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-              <span className="h-2 w-2 shrink-0 rounded-full bg-red-400 animate-pulse" />
-              Active Alert
-            </div>
-            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-              <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" />
-              GPS Fallback (last known)
-            </div>
-          </div>
-        </div>
-
       </div>
     </div>
   )

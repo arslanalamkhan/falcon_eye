@@ -1,90 +1,158 @@
-import { useState, useEffect } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import {
+  RefreshCw, ScrollText, SearchX, CircleAlert, MapPin, Radio, User, Building2, GitBranch, Video, Activity,
+} from "lucide-react"
 import { api } from "@/lib/api"
-import { Badge } from "@/components/ui/badge"
+import { cn, errorMessage } from "@/lib/utils"
+import { timeAgo, formatDateTime } from "@/lib/format"
+import { useNow } from "@/hooks/useNow"
 import { Button } from "@/components/ui/button"
-import { Loader2, RefreshCw } from "lucide-react"
+import { Card } from "@/components/ui/card"
+import { SearchInput } from "@/components/ui/input"
+import { EmptyState } from "@/components/ui/empty-state"
+import { DepartmentBadge, PanelSkeleton, PanelToolbar } from "./shared"
 import type { AuditEntry } from "./types"
 
-const ACTION_VARIANT = (action: string): 'danger' | 'warning' | 'info' | 'success' => {
-  if (action.endsWith('.delete')) return 'danger'
-  if (action.endsWith('.create')) return 'success'
-  if (action.includes('password') || action.includes('route')) return 'warning'
-  return 'info'
+const ENTITY_ICON: Record<string, React.ElementType> = {
+  site: MapPin, receiver: Radio, user: User, department: Building2, route: GitBranch, camera: Video,
+}
+
+const VERBS: Record<string, string> = {
+  create: "Created", delete: "Deleted", update: "Updated", enable: "Enabled", disable: "Disabled",
+}
+
+// "user.sites.update" → "Updated site access", "route.enable" → "Enabled route"
+function describe(action: string): { text: string; tone: "danger" | "success" | "default" } {
+  if (action === "user.sites.update")    return { text: "Updated site access for user", tone: "default" }
+  if (action === "user.password_reset")  return { text: "Reset password for user", tone: "default" }
+  const [entity, verb] = action.split(".")
+  const text = `${VERBS[verb] ?? verb ?? "Changed"} ${entity}`
+  return { text, tone: verb === "delete" || verb === "disable" ? "danger" : verb === "create" || verb === "enable" ? "success" : "default" }
+}
+
+// Prefer a human name stored in the entry's details over a numeric ID
+function entityName(e: AuditEntry): string | null {
+  const d = e.details
+  if (d && typeof d === "object") {
+    const rec = d as Record<string, unknown>
+    for (const key of ["code", "email", "label"]) {
+      if (typeof rec[key] === "string" && rec[key]) return rec[key] as string
+    }
+  }
+  return e.entity_id
+}
+
+function dayLabel(iso: string): string {
+  const d = new Date(iso)
+  const today = new Date()
+  const yesterday = new Date(today)
+  yesterday.setDate(today.getDate() - 1)
+  if (d.toDateString() === today.toDateString()) return "Today"
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday"
+  return d.toLocaleDateString("en-PK", { weekday: "long", day: "numeric", month: "long", year: "numeric" })
 }
 
 export function AuditPanel({ isSuper }: { isSuper: boolean }) {
-  const [entries, setEntries] = useState<AuditEntry[]>([])
-  const [loading, setLoading] = useState(true)
+  const now = useNow()
+  const [entries, setEntries]   = useState<AuditEntry[]>([])
+  const [loading, setLoading]   = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [error, setError]       = useState("")
+  const [query, setQuery]       = useState("")
 
-  const load = async () => {
-    setLoading(true)
+  const load = useCallback(async () => {
+    setError("")
     try {
-      const rows = await api.get<AuditEntry[]>('/api/admin/audit?limit=200')
-      setEntries(rows)
+      setEntries(await api.get<AuditEntry[]>("/api/admin/audit?limit=300"))
+    } catch (err) {
+      setError(errorMessage(err, "Couldn't load the audit log"))
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
-  }
+  }, [])
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [load])
+
+  const groups = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    const filtered = q
+      ? entries.filter((e) => [e.action, e.entity_type, e.entity_id, e.actor_name, e.actor_email, e.department_code, describe(e.action).text]
+          .some((v) => v?.toLowerCase().includes(q)))
+      : entries
+    const map = new Map<string, AuditEntry[]>()
+    for (const e of filtered) {
+      const key = dayLabel(e.created_at)
+      map.set(key, [...(map.get(key) ?? []), e])
+    }
+    return [...map.entries()]
+  }, [entries, query])
+
+  if (loading) return <PanelSkeleton />
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-muted-foreground">
-          {isSuper ? 'System-wide activity log.' : "Your department's activity log."}
-        </p>
-        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-          <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
-      </div>
+    <>
+      <PanelToolbar
+        actions={
+          <Button variant="outline" onClick={() => { setRefreshing(true); load() }} disabled={refreshing}>
+            <RefreshCw className={cn(refreshing && "animate-spin")} /> Refresh
+          </Button>
+        }
+      >
+        <div className="w-full sm:max-w-xs">
+          <SearchInput value={query} onChange={setQuery} placeholder="Search activity…" />
+        </div>
+        <p className="text-xs text-muted-foreground">{isSuper ? "System-wide activity" : "Your department's activity"}</p>
+      </PanelToolbar>
 
-      {loading ? (
-        <div className="flex h-32 items-center justify-center gap-3 text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          <span className="text-sm">Loading audit log…</span>
-        </div>
+      {error ? (
+        <Card><EmptyState icon={CircleAlert} tone="danger" title="Couldn't load activity" description={error} /></Card>
       ) : entries.length === 0 ? (
-        <div className="rounded-lg border border-border py-12 text-center text-sm text-muted-foreground">
-          No activity recorded yet.
-        </div>
+        <Card><EmptyState icon={ScrollText} title="No activity yet" description="Changes to departments, users, sites, cameras and routing are recorded here." /></Card>
+      ) : groups.length === 0 ? (
+        <Card><EmptyState icon={SearchX} title="No matching activity" /></Card>
       ) : (
-        <div className="rounded-lg border border-border overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/30">
-              <tr>
-                {['When', 'Actor', ...(isSuper ? ['Department'] : []), 'Action', 'Entity'].map(h => (
-                  <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {entries.map(e => (
-                <tr key={e.id} className="hover:bg-muted/20 transition-colors">
-                  <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">
-                    {new Date(e.created_at).toLocaleString('en-PK', { dateStyle: 'medium', timeStyle: 'short' })}
-                  </td>
-                  <td className="px-4 py-2.5 text-xs text-foreground">
-                    {e.actor_name || e.actor_email || <span className="text-muted-foreground">system</span>}
-                  </td>
-                  {isSuper && (
-                    <td className="px-4 py-2.5">
-                      {e.department_code && <Badge variant="info" className="text-[10px] font-mono">{e.department_code}</Badge>}
-                    </td>
-                  )}
-                  <td className="px-4 py-2.5">
-                    <Badge variant={ACTION_VARIANT(e.action)} className="text-[10px] font-mono">{e.action}</Badge>
-                  </td>
-                  <td className="px-4 py-2.5 text-xs text-muted-foreground font-mono">
-                    {e.entity_type}{e.entity_id ? `:${e.entity_id}` : ''}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="space-y-6">
+          {groups.map(([day, items]) => (
+            <section key={day}>
+              <h3 className="mb-2 px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{day}</h3>
+              <Card>
+                <ul className="divide-y divide-border">
+                  {items.map((e) => {
+                    const Icon = ENTITY_ICON[e.entity_type] ?? Activity
+                    const d = describe(e.action)
+                    return (
+                      <li key={e.id} className="flex items-start gap-3 px-4 py-3 sm:px-5">
+                        <div className={cn(
+                          "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border",
+                          d.tone === "danger"  && "border-danger/25 bg-danger/10 text-danger",
+                          d.tone === "success" && "border-success/25 bg-success/10 text-success",
+                          d.tone === "default" && "border-border bg-muted/60 text-muted-foreground"
+                        )}>
+                          <Icon className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm">
+                            <span className={cn("font-medium", e.actor_id === null ? "italic text-muted-foreground" : "text-foreground")}>
+                              {e.actor_name || e.actor_email || "Removed user"}
+                            </span>{" "}
+                            <span className="text-muted-foreground">{d.text.charAt(0).toLowerCase() + d.text.slice(1)}</span>{" "}
+                            {entityName(e) && <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">{entityName(e)}</code>}
+                          </p>
+                          <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                            <time dateTime={e.created_at} title={formatDateTime(e.created_at)}>{timeAgo(e.created_at, now)}</time>
+                            {isSuper && e.department_code && <DepartmentBadge code={e.department_code} />}
+                          </p>
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </Card>
+            </section>
+          ))}
         </div>
       )}
-    </div>
+    </>
   )
 }

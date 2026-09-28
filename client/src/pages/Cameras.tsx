@@ -1,13 +1,25 @@
-import { useEffect, useState, useCallback } from "react"
-import { useSearchParams, useNavigate } from "react-router-dom"
+import { useEffect, useMemo, useState, useCallback } from "react"
+import { Link, useSearchParams } from "react-router-dom"
+import {
+  Camera, RefreshCw, VideoOff, CircleAlert, Square, Columns2, Columns3, Siren, MapPinOff, SearchX,
+} from "lucide-react"
 import { api } from "@/lib/api"
-import { useFirebaseData } from "@/hooks/useFirebaseData"
+import { cn } from "@/lib/utils"
+import { useFirebaseData, type SiteData } from "@/hooks/useFirebaseData"
+import { usePersistentState } from "@/hooks/usePersistentState"
+import { useAuth } from "@/contexts/AuthContext"
+import { isAdminRole } from "@/types/access"
 import VideoPlayer from "@/components/ui/VideoPlayer"
+import { PageHeader } from "@/components/layout/PageHeader"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Camera, Loader2, AlertCircle, ChevronDown, RefreshCw, VideoOff,
-} from "lucide-react"
+import { Card } from "@/components/ui/card"
+import { SearchInput, Select } from "@/components/ui/input"
+import { EmptyState } from "@/components/ui/empty-state"
+import { Skeleton, SkeletonRows } from "@/components/ui/skeleton"
+import { Tip } from "@/components/ui/tooltip"
+import { SiteStateDot, SiteStatusBadge } from "@/components/sites/site-ui"
+import { pluralize } from "@/lib/format"
 
 type CameraRow = {
   id: number
@@ -23,38 +35,38 @@ type CameraRow = {
   imou_channel_id: string
 }
 
+type Cols = "1" | "2" | "3"
+const GRID: Record<Cols, string> = {
+  "1": "grid-cols-1 max-w-4xl",
+  "2": "grid-cols-1 md:grid-cols-2",
+  "3": "grid-cols-1 md:grid-cols-2 2xl:grid-cols-3",
+}
+
 export default function Cameras() {
-  const [searchParams, setSearchParams] = useSearchParams()
-  const navigate = useNavigate()
-  const { sites } = useFirebaseData()
+  const { user } = useAuth()
+  const { sites, sitesLoaded } = useFirebaseData()
+  const [params, setParams] = useSearchParams()
+  // Default to the first site (alerts sort first) when none is in the URL
+  const siteId = params.get("site") || sites[0]?.id || ""
 
-  const [selectedSiteId, setSelectedSiteId] = useState<string>(searchParams.get("site") ?? "")
-  const [cameras, setCameras]               = useState<CameraRow[]>([])
-  const [loading, setLoading]               = useState(false)
-  const [error, setError]                   = useState("")
-  const [streamKey, setStreamKey]           = useState(0)
+  const [cameras, setCameras]     = useState<CameraRow[]>([])
+  const [loading, setLoading]     = useState(false)
+  const [error, setError]         = useState("")
+  const [streamKey, setStreamKey] = useState(0)
+  const [cols, setCols]           = usePersistentState<Cols>("fe.cameras.cols", "2")
 
-  // Keep URL query in sync with selection
-  useEffect(() => {
-    if (selectedSiteId) setSearchParams({ site: selectedSiteId }, { replace: true })
-    else setSearchParams({}, { replace: true })
-  }, [selectedSiteId, setSearchParams])
+  const selectSite = useCallback((id: string) => {
+    setParams(id ? { site: id } : {}, { replace: true })
+    setStreamKey((k) => k + 1)
+  }, [setParams])
 
-  // Auto-select first site if URL has no param and sites loaded
-  useEffect(() => {
-    if (!selectedSiteId && sites.length > 0) {
-      setSelectedSiteId(sites[0].id)
-    }
-  }, [sites, selectedSiteId])
-
-  const loadCameras = useCallback(async (siteId: string) => {
-    if (!siteId) return
+  const loadCameras = useCallback(async (id: string) => {
+    if (!id) return
     setLoading(true)
     setError("")
     setCameras([])
     try {
-      const rows = await api.get<CameraRow[]>(`/api/cameras?siteId=${encodeURIComponent(siteId)}`)
-      setCameras(rows)
+      setCameras(await api.get<CameraRow[]>(`/api/cameras?siteId=${encodeURIComponent(id)}`))
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load cameras")
     } finally {
@@ -62,145 +74,194 @@ export default function Cameras() {
     }
   }, [])
 
-  useEffect(() => {
-    loadCameras(selectedSiteId)
-  }, [selectedSiteId, loadCameras])
+  useEffect(() => { loadCameras(siteId) }, [siteId, loadCameras])
 
-  const selectedSite = sites.find(s => s.id === selectedSiteId)
-
-  function handleSiteChange(siteId: string) {
-    setSelectedSiteId(siteId)
-    setStreamKey(k => k + 1)  // force VideoPlayer remount to restart streams
-  }
-
-  function handleRefresh() {
-    setStreamKey(k => k + 1)
-    loadCameras(selectedSiteId)
-  }
+  const selected = sites.find((s) => s.id === siteId)
+  const restart = () => { setStreamKey((k) => k + 1); loadCameras(siteId) }
 
   return (
-    <div className="flex flex-col gap-4 h-full">
-
-      {/* Page header */}
-      <div className="flex items-start justify-between shrink-0 flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-foreground">Camera Feeds</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Live RTSP surveillance feeds per site
-          </p>
-        </div>
-
-        <div className="flex items-center gap-3">
-          {selectedSite?.alert && (
-            <Badge variant="danger" className="animate-pulse">
-              ALERT ACTIVE
-            </Badge>
-          )}
-          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={loading}>
-            <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${loading ? "animate-spin" : ""}`} />
-            Restart Streams
-          </Button>
-        </div>
-      </div>
-
-      {/* Site selector */}
-      <div className="flex items-center gap-3 shrink-0 flex-wrap">
-        <div className="relative">
-          <select
-            value={selectedSiteId}
-            onChange={e => handleSiteChange(e.target.value)}
-            className="h-9 min-w-[220px] appearance-none rounded-md border border-input bg-background pl-3 pr-8 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-          >
-            <option value="" disabled>Select a site…</option>
-            {sites.map(s => (
-              <option key={s.id} value={s.id}>{s.label}</option>
-            ))}
-          </select>
-          <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-        </div>
-
-        {selectedSite && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className={`h-2 w-2 rounded-full ${selectedSite.alert ? "bg-red-400 animate-pulse" : "bg-emerald-400"}`} />
-            {selectedSite.alert ? "Alert Active" : "Standby"}
-          </div>
-        )}
-
-        {cameras.length > 0 && (
-          <span className="text-xs text-muted-foreground">
-            {cameras.length} camera{cameras.length !== 1 ? "s" : ""}
-          </span>
-        )}
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 min-h-0">
-
-        {!selectedSiteId && (
-          <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground">
-            <Camera className="h-8 w-8 opacity-40" />
-            <p className="text-sm">Select a site to view camera feeds</p>
-          </div>
-        )}
-
-        {selectedSiteId && loading && (
-          <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground">
-            <Loader2 className="h-5 w-5 animate-spin" />
-            <p className="text-sm">Loading cameras…</p>
-          </div>
-        )}
-
-        {selectedSiteId && error && (
-          <div className="flex flex-col items-center justify-center h-48 gap-3 text-destructive">
-            <AlertCircle className="h-5 w-5" />
-            <p className="text-sm">{error}</p>
-            <Button variant="outline" size="sm" onClick={() => loadCameras(selectedSiteId)}>
-              <RefreshCw className="h-3.5 w-3.5 mr-1.5" />Retry
+    <>
+      <PageHeader
+        title="Camera feeds"
+        description="Live video from on-site cameras"
+        actions={
+          <>
+            <div className="hidden items-center rounded-lg border border-border bg-card/60 p-0.5 md:flex" role="group" aria-label="Grid layout">
+              {([["1", Square, "Single column"], ["2", Columns2, "Two columns"], ["3", Columns3, "Three columns"]] as const).map(([value, Icon, label]) => (
+                <Tip key={value} content={label}>
+                  <button
+                    type="button"
+                    onClick={() => setCols(value)}
+                    aria-pressed={cols === value}
+                    aria-label={label}
+                    className={cn(
+                      "flex h-8 w-8 items-center justify-center rounded-md transition-colors",
+                      cols === value ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    <Icon className="h-4 w-4" />
+                  </button>
+                </Tip>
+              ))}
+            </div>
+            <Button variant="outline" onClick={restart} disabled={!siteId || loading}>
+              <RefreshCw className={cn(loading && "animate-spin")} /> Restart streams
             </Button>
-          </div>
-        )}
+          </>
+        }
+      />
 
-        {!loading && !error && selectedSiteId && cameras.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground">
-            <VideoOff className="h-8 w-8 opacity-40" />
-            <p className="text-sm">No cameras configured for this site</p>
-            <button
-              onClick={() => navigate("/admin")}
-              className="text-xs text-primary hover:underline"
-            >
-              Add cameras in Admin panel
-            </button>
-          </div>
-        )}
+      <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+        <SitePicker sites={sites} loading={!sitesLoaded} selectedId={siteId} onSelect={selectSite} />
 
-        {!loading && !error && cameras.length > 0 && (
-          <div className={`grid gap-4 ${
-            cameras.length === 1 ? "grid-cols-1 max-w-2xl" :
-            cameras.length === 2 ? "grid-cols-1 md:grid-cols-2" :
-            cameras.length <= 4  ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-2" :
-                                   "grid-cols-1 md:grid-cols-2 xl:grid-cols-3"
-          }`}>
-            {cameras.map(cam => (
-              <div key={`${cam.id}-${streamKey}`} className="rounded-lg border border-border bg-card overflow-hidden">
-                <VideoPlayer cameraId={cam.id} label={cam.label} />
-                <div className="px-3 py-2 border-t border-border bg-muted/20 flex items-center justify-between">
-                  <div className="min-w-0">
-                    <p className="text-xs font-medium text-foreground truncate">{cam.label}</p>
-                    {cam.stream_type === 'imou'
-                      ? <p className="text-[10px] font-mono text-muted-foreground">Device: {cam.imou_device_id} — ch{cam.imou_channel_id}</p>
-                      : <p className="text-[10px] font-mono text-muted-foreground">{cam.ip}:{cam.port} — ch{cam.channel}</p>
-                    }
+        <div className="min-w-0 space-y-4">
+          {/* Compact picker for phones/tablets */}
+          <div className="lg:hidden">
+            <Select value={siteId} onChange={(e) => selectSite(e.target.value)} aria-label="Site" disabled={sites.length === 0}>
+              {sites.length === 0 && <option value="">No sites available</option>}
+              {sites.map((s) => (
+                <option key={s.id} value={s.id}>{s.alert ? "⚠ " : ""}{s.label}{s.department_code ? ` (${s.department_code})` : ""}</option>
+              ))}
+            </Select>
+          </div>
+
+          {selected && <SelectedSiteHeader site={selected} count={loading ? null : cameras.length} />}
+
+          {!sitesLoaded ? (
+            <div className={cn("grid gap-4", GRID[cols])}>
+              {[0, 1].map((i) => <Skeleton key={i} className="aspect-video rounded-xl" />)}
+            </div>
+          ) : sites.length === 0 ? (
+            <Card><EmptyState icon={MapPinOff} title="No sites available" description="Cameras appear here once you have access to a site." /></Card>
+          ) : loading ? (
+            <div className={cn("grid gap-4", GRID[cols])}>
+              {[0, 1].map((i) => <Skeleton key={i} className="aspect-video rounded-xl" />)}
+            </div>
+          ) : error ? (
+            <Card>
+              <EmptyState
+                icon={CircleAlert}
+                tone="danger"
+                title="Couldn't load cameras"
+                description={error}
+                action={<Button variant="outline" onClick={() => loadCameras(siteId)}><RefreshCw /> Try again</Button>}
+              />
+            </Card>
+          ) : cameras.length === 0 ? (
+            <Card>
+              <EmptyState
+                icon={VideoOff}
+                title="No cameras at this site"
+                description="Cameras attached to this site will stream here automatically."
+                action={isAdminRole(user?.role) ? (
+                  <Button asChild variant="outline"><Link to="/admin?tab=cameras"><Camera /> Add a camera</Link></Button>
+                ) : undefined}
+              />
+            </Card>
+          ) : (
+            <div className={cn("grid gap-4", GRID[cols])}>
+              {cameras.map((cam) => (
+                <Card key={`${cam.id}-${streamKey}`} className="overflow-hidden">
+                  <VideoPlayer cameraId={cam.id} label={cam.label} />
+                  <div className="flex items-center justify-between gap-3 px-4 py-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{cam.label}</p>
+                      <p className="truncate font-mono text-xs text-muted-foreground">
+                        {cam.stream_type === "imou"
+                          ? `${cam.imou_device_id} · ch${cam.imou_channel_id}`
+                          : `${cam.ip}:${cam.port} · ch${cam.channel}`}
+                      </p>
+                    </div>
+                    <Badge variant={cam.stream_type === "imou" ? "success" : "info"} size="sm">
+                      {cam.stream_type === "imou" ? "IMOU Cloud" : "RTSP"}
+                    </Badge>
                   </div>
-                  <Badge variant={cam.stream_type === 'imou' ? 'success' : 'info'} className="text-[10px] shrink-0 ml-2">
-                    {cam.stream_type === 'imou' ? 'IMOU CLOUD' : 'RTSP'}
-                  </Badge>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
+    </>
+  )
+}
+
+function SelectedSiteHeader({ site, count }: { site: SiteData; count: number | null }) {
+  if (site.alert) {
+    return (
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-danger/50 bg-danger/10 px-4 py-3 shadow-glow-danger">
+        <Siren className="h-5 w-5 shrink-0 text-danger animate-alert-flash" />
+        <div className="min-w-0 flex-1">
+          <p className="font-semibold text-danger">{site.label} — panic alert active</p>
+          <p className="text-xs text-danger/80">{count === null ? "Loading cameras…" : pluralize(count, "camera")}</p>
+        </div>
+        <Button asChild size="sm" className="bg-danger text-danger-foreground hover:bg-danger/90">
+          <Link to={`/map?site=${encodeURIComponent(site.id)}`}>Locate on map</Link>
+        </Button>
+      </div>
+    )
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <h2 className="text-base font-semibold">{site.label}</h2>
+      <SiteStatusBadge site={site} compact />
+      <span className="text-xs text-muted-foreground">
+        <span className="font-mono">{site.department_code ?? site.id}</span>
+        {count !== null && <> · {pluralize(count, "camera")}</>}
+      </span>
     </div>
+  )
+}
+
+function SitePicker({ sites, loading, selectedId, onSelect }: {
+  sites: SiteData[]
+  loading: boolean
+  selectedId: string
+  onSelect: (id: string) => void
+}) {
+  const [query, setQuery] = useState("")
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return q ? sites.filter((s) => s.label.toLowerCase().includes(q) || s.id.toLowerCase().includes(q)) : sites
+  }, [sites, query])
+
+  return (
+    <Card className="sticky top-[calc(var(--topbar-h)+1.5rem)] hidden max-h-[calc(100dvh-var(--topbar-h)-3rem)] flex-col overflow-hidden lg:flex">
+      <div className="border-b border-border p-3">
+        <SearchInput value={query} onChange={setQuery} placeholder="Find a site…" />
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+        {loading ? (
+          <SkeletonRows rows={6} className="p-2.5" />
+        ) : filtered.length === 0 ? (
+          <EmptyState icon={SearchX} title="No sites" className="py-8" />
+        ) : (
+          <ul role="listbox" aria-label="Sites">
+            {filtered.map((s) => {
+              const active = s.id === selectedId
+              return (
+                <li key={s.id} role="option" aria-selected={active}>
+                  <button
+                    type="button"
+                    onClick={() => onSelect(s.id)}
+                    className={cn(
+                      "flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                      active ? "bg-primary/15" : "hover:bg-accent/60"
+                    )}
+                  >
+                    <SiteStateDot site={s} />
+                    <div className="min-w-0 flex-1">
+                      <p className={cn("truncate text-sm font-medium", s.alert ? "text-danger" : active ? "text-foreground" : "text-foreground/90")}>{s.label}</p>
+                      <p className="truncate font-mono text-2xs text-muted-foreground">{s.department_code ?? s.id}</p>
+                    </div>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </div>
+    </Card>
   )
 }

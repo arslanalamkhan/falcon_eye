@@ -1,131 +1,139 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
+import { useNavigate } from "react-router-dom"
+import { toast } from "sonner"
+import { Plus, TrainFront, Pickaxe, Radio, Satellite, Signal, MapPin, Camera, Trash2, MapPinOff, SearchX } from "lucide-react"
 import { api } from "@/lib/api"
+import { errorMessage } from "@/lib/utils"
+import { useConfirm } from "@/hooks/useConfirm"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Plus, Loader2, Satellite } from "lucide-react"
-import { FormField, EntityTable, DepartmentBadge } from "./shared"
+import { Card } from "@/components/ui/card"
+import { SearchInput } from "@/components/ui/input"
+import { EmptyState } from "@/components/ui/empty-state"
+import { DataTable, RowActions, type Column } from "@/components/ui/data-table"
+import { DepartmentBadge, PanelToolbar, ReadOnlyHint } from "./shared"
+import { AddSiteDialog } from "./AddSiteDialog"
 import type { Site, DepartmentRow } from "./types"
+
+const TYPE_ICON: Record<string, React.ElementType> = { train: TrainFront, mine: Pickaxe, other: Radio }
+const TYPE_LABEL: Record<string, string> = { train: "Train", mine: "Mine", other: "Other" }
 
 export function SitesPanel({ sites, onRefresh, isSuper, currentDeptId, departments }: {
   sites: Site[]; onRefresh: () => void; isSuper: boolean; currentDeptId: number
   departments: DepartmentRow[]
 }) {
-  const emptyForm = { id: '', label: '', type: 'train', region: '', source: 'cellular', mobile_id: '', imo: '', mmsi: '', department_id: String(currentDeptId) }
-  const [form, setForm] = useState(emptyForm)
-  const [saving, setSaving] = useState(false)
-  const [deleting, setDeleting] = useState<string | null>(null)
-  const [formErr, setFormErr] = useState('')
+  const navigate = useNavigate()
+  const confirm = useConfirm()
+  const [query, setQuery]     = useState("")
+  const [addOpen, setAddOpen] = useState(false)
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setFormErr('')
-    setSaving(true)
+  const canManage = (s: Site) => isSuper || s.department_id === currentDeptId
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return sites
+    return sites.filter((s) => [s.label, s.id, s.region, s.department_code].some((v) => v?.toLowerCase().includes(q)))
+  }, [sites, query])
+
+  const remove = async (s: Site) => {
+    const ok = await confirm({
+      title: `Delete ${s.label}?`,
+      description: "This removes the site, its cameras and all of its alert routes. The device's live data in Firebase is not deleted.",
+      confirmLabel: "Delete site",
+      destructive: true,
+    })
+    if (!ok) return
     try {
-      await api.post('/api/admin/sites', { ...form, department_id: isSuper ? Number(form.department_id) : undefined })
-      setForm({ ...emptyForm, department_id: form.department_id })
+      await api.delete(`/api/admin/sites/${encodeURIComponent(s.id)}`)
+      toast.success(`${s.label} deleted`)
       onRefresh()
     } catch (err) {
-      setFormErr(err instanceof Error ? err.message : 'Failed')
-    } finally {
-      setSaving(false)
+      toast.error("Couldn't delete site", { description: errorMessage(err) })
     }
   }
 
-  const del = async (id: string) => {
-    setDeleting(id)
-    try { await api.delete(`/api/admin/sites/${id}`); onRefresh() }
-    catch { /* ignore */ }
-    finally { setDeleting(null) }
-  }
+  const columns: Column<Site>[] = [
+    {
+      id: "site", header: "Site", mobile: "title",
+      cell: (s) => {
+        const Icon = TYPE_ICON[s.type] ?? Radio
+        return (
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/60 text-muted-foreground md:flex">
+              <Icon className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+              <p className="truncate font-medium">{s.label}</p>
+              <p className="truncate font-mono text-xs text-muted-foreground">{s.id}</p>
+            </div>
+          </div>
+        )
+      },
+    },
+    { id: "type", header: "Type", cell: (s) => <span className="text-sm">{TYPE_LABEL[s.type] ?? s.type}</span> },
+    {
+      id: "source", header: "Tracking",
+      cell: (s) => s.source === "satellite_fms"
+        ? <Badge variant="info" size="sm"><Satellite /> Satellite</Badge>
+        : <Badge variant="outline" size="sm"><Signal /> Cellular</Badge>,
+    },
+    { id: "region", header: "Region", cell: (s) => <span className="text-muted-foreground">{s.region || "—"}</span> },
+    {
+      id: "dept", header: "Department",
+      cell: (s) => (
+        <div className="flex flex-col items-start gap-1">
+          <DepartmentBadge code={s.department_code} />
+          {!canManage(s) && <ReadOnlyHint />}
+        </div>
+      ),
+    },
+    { id: "owner", header: "Created by", mobile: "hidden", cell: (s) => <span className="text-muted-foreground">{s.owner_name || "—"}</span> },
+  ]
 
   return (
-    <div className="space-y-5">
-      <div className="rounded-lg border border-border bg-card p-4">
-        <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
-          <Plus className="h-4 w-4 text-primary" /> Add Site
-        </h3>
-        <form onSubmit={submit} className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <FormField label="Site ID" value={form.id} onChange={v => setForm(f => ({ ...f, id: v }))} placeholder="khyber_express" required mono />
-          <FormField label="Label" value={form.label} onChange={v => setForm(f => ({ ...f, label: v }))} placeholder="Khyber Express" required />
-          <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Type</label>
-            <select
-              value={form.type}
-              onChange={e => setForm(f => ({ ...f, type: e.target.value }))}
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-            >
-              <option value="train">Train</option>
-              <option value="mine">Mining Site</option>
-              <option value="other">Other</option>
-            </select>
-          </div>
-          <FormField label="Region" value={form.region} onChange={v => setForm(f => ({ ...f, region: v }))} placeholder="KP/Punjab" />
-          {isSuper && (
-            <div className="flex flex-col gap-1">
-              <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Department</label>
-              <select
-                value={form.department_id}
-                onChange={e => setForm(f => ({ ...f, department_id: e.target.value }))}
-                className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              >
-                {departments.map(d => <option key={d.id} value={d.id}>{d.code} — {d.name}</option>)}
-              </select>
-            </div>
-          )}
-          <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Tracking Hardware</label>
-            <select
-              value={form.source}
-              onChange={e => setForm(f => ({ ...f, source: e.target.value }))}
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-            >
-              <option value="cellular">Cellular (ESP32 panic button)</option>
-              <option value="satellite_fms">Satellite (Falcon Mega Track)</option>
-            </select>
-          </div>
-          {form.source === 'satellite_fms' && (
-            <>
-              <FormField label="Mobile ID" value={form.mobile_id} onChange={v => setForm(f => ({ ...f, mobile_id: v }))} placeholder="01398397SKY12AE" required mono />
-              <FormField label="IMO (optional)" value={form.imo} onChange={v => setForm(f => ({ ...f, imo: v }))} placeholder="rarely set on ground terminals" mono />
-              <FormField label="MMSI (optional)" value={form.mmsi} onChange={v => setForm(f => ({ ...f, mmsi: v }))} placeholder="rarely set on ground terminals" mono />
-              <p className="col-span-2 md:col-span-4 text-[11px] text-muted-foreground -mt-1">
-                Mobile ID is the terminal's own hardware serial (shown as "MobileID" in Falcon Mega Track's data) and is required to match incoming reports to this site. IMO/MMSI are optional — these terminals report placeholder values for them, not real ship identifiers.
-              </p>
-            </>
-          )}
-          <div className="col-span-2 md:col-span-4 flex items-center gap-3">
-            <Button type="submit" size="sm" disabled={saving}>
-              {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-1.5" />}
-              Add Site
-            </Button>
-            {formErr && <p className="text-xs text-destructive">{formErr}</p>}
-          </div>
-        </form>
-      </div>
+    <>
+      <PanelToolbar actions={<Button onClick={() => setAddOpen(true)}><Plus /> Add site</Button>}>
+        <div className="w-full sm:max-w-xs">
+          <SearchInput value={query} onChange={setQuery} placeholder="Search sites…" />
+        </div>
+      </PanelToolbar>
 
-      <EntityTable
-        columns={['Site ID', 'Label', 'Type', 'Source', 'Region', 'Department', 'Created By']}
-        rows={sites.map(s => ({
-          key: s.id,
-          cells: [
-            <code className="text-[11px] text-primary">{s.id}</code>,
-            s.label,
-            <Badge variant={s.type === 'train' ? 'info' : 'warning'} className="text-[10px]">{s.type}</Badge>,
-            s.source === 'satellite_fms'
-              ? <Badge variant="info" className="text-[10px] gap-1"><Satellite className="h-2.5 w-2.5" />Satellite</Badge>
-              : <span className="text-[11px] text-muted-foreground">Cellular</span>,
-            s.region || '—',
-            <DepartmentBadge code={s.department_code} />,
-            s.owner_name || '—',
-          ],
-        }))}
-        onDelete={del}
-        deletingId={deleting}
-        canDelete={(id) => {
-          const s = sites.find(x => x.id === id)
-          return isSuper || s?.department_id === currentDeptId
-        }}
+      <Card className="overflow-hidden">
+        <DataTable
+          columns={columns}
+          rows={filtered}
+          rowKey={(s) => s.id}
+          actions={(s) => (
+            <RowActions
+              label={`Actions for ${s.label}`}
+              actions={[
+                { label: "Show on map", icon: MapPin, onSelect: () => navigate(`/map?site=${encodeURIComponent(s.id)}`) },
+                { label: "View cameras", icon: Camera, onSelect: () => navigate(`/cameras?site=${encodeURIComponent(s.id)}`) },
+                { label: "Delete site", icon: Trash2, destructive: true, separated: true, hidden: !canManage(s), onSelect: () => remove(s) },
+              ]}
+            />
+          )}
+          empty={sites.length === 0 ? (
+            <EmptyState
+              icon={MapPinOff}
+              title="No sites yet"
+              description="Register a panic-button or satellite tracker so it can be monitored and routed."
+              action={<Button onClick={() => setAddOpen(true)}><Plus /> Add your first site</Button>}
+            />
+          ) : (
+            <EmptyState icon={SearchX} title="No matching sites" description="Try a different name, ID or region." />
+          )}
+        />
+      </Card>
+
+      <AddSiteDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        isSuper={isSuper}
+        currentDeptId={currentDeptId}
+        departments={departments}
+        onCreated={onRefresh}
       />
-    </div>
+    </>
   )
 }
