@@ -1,7 +1,7 @@
 const express  = require('express')
 const pool     = require('../db')
 const { requireAuth } = require('../middleware/auth')
-const { getVisibleSiteIds, canManageSite, canManageCamera } = require('../services/visibility')
+const { getVisibleSiteIds, canManageSite, canManageCamera } = require('../services/access')
 
 const router   = express.Router()
 
@@ -37,17 +37,21 @@ router.get('/all', async (req, res) => {
       ? pool.query(
           `SELECT c.id, c.site_id, c.label, c.ip, c.port, c.channel, c.subtype,
                   c.active, c.created_at, c.stream_type, c.imou_device_id, c.imou_channel_id,
-                  s.label AS site_label, s.type AS site_type, s.owner_id AS site_owner_id
+                  s.label AS site_label, s.type AS site_type, s.owner_id AS site_owner_id,
+                  s.department_id AS site_department_id, d.code AS site_department_code
              FROM cameras c
              JOIN sites s ON s.id = c.site_id
+             JOIN departments d ON d.id = s.department_id
             ORDER BY s.label, c.id`
         )
       : pool.query(
           `SELECT c.id, c.site_id, c.label, c.ip, c.port, c.channel, c.subtype,
                   c.active, c.created_at, c.stream_type, c.imou_device_id, c.imou_channel_id,
-                  s.label AS site_label, s.type AS site_type, s.owner_id AS site_owner_id
+                  s.label AS site_label, s.type AS site_type, s.owner_id AS site_owner_id,
+                  s.department_id AS site_department_id, d.code AS site_department_code
              FROM cameras c
              JOIN sites s ON s.id = c.site_id
+             JOIN departments d ON d.id = s.department_id
             WHERE c.site_id = ANY($1)
             ORDER BY s.label, c.id`,
           [visibleSiteIds]

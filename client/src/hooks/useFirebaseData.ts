@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from "react"
 import { ref, onValue, get, query, orderByKey, limitToLast } from "firebase/database"
 import { db } from "@/lib/firebase"
-import { api } from "@/lib/api"
+import { useAuth } from "@/contexts/AuthContext"
 
 export type SiteData = {
   id: string
@@ -9,6 +9,7 @@ export type SiteData = {
   alert: boolean
   status: string
   last_alert: string
+  department_code?: string
   gps: {
     lat: string
     lng: string
@@ -30,11 +31,6 @@ export type AlertEntry = {
 }
 
 type RawAlert = Omit<AlertEntry, "alertStatus">
-
-export type HQData = {
-  status: string
-  last_seen: string
-}
 
 function todayStr(): string {
   return new Date().toISOString().split("T")[0]
@@ -61,16 +57,11 @@ export function useFirebaseData() {
   const [sitesMap, setSitesMap] = useState<Record<string, SiteData>>({})
   const [todayAlerts, setTodayAlerts] = useState<RawAlert[]>([])
   const [pastAlerts, setPastAlerts] = useState<RawAlert[]>([])
-  const [hq, setHQ] = useState<HQData | null>(null)
-  // undefined = not loaded yet, null = unrestricted (admin), array = visible site IDs
-  const [visibleSiteIds, setVisibleSiteIds] = useState<string[] | null | undefined>(undefined)
 
-  // One-time: which sites this user is allowed to see (own + admin-granted)
-  useEffect(() => {
-    api.get<{ siteIds: string[] | null }>("/api/admin/my-visibility")
-      .then((d) => setVisibleSiteIds(d.siteIds))
-      .catch(() => setVisibleSiteIds([]))
-  }, [])
+  // Visible site set comes from the department access model (see
+  // GET /api/auth/me), loaded once at login by AuthContext — not a
+  // separate Firebase-read-only call.
+  const { access } = useAuth()
 
   // Live: sites node
   useEffect(() => {
@@ -90,14 +81,6 @@ export function useFirebaseData() {
         }
       }
       setSitesMap(parsed)
-    })
-  }, [])
-
-  // Live: HQ node
-  useEffect(() => {
-    const r = ref(db, "hq")
-    return onValue(r, (snap) => {
-      if (snap.exists()) setHQ(snap.val() as HQData)
     })
   }, [])
 
@@ -137,15 +120,32 @@ export function useFirebaseData() {
   }, [])
 
   const isVisible = useMemo(() => {
-    if (visibleSiteIds === undefined) return () => false
-    if (visibleSiteIds === null) return () => true
-    const set = new Set(visibleSiteIds)
+    if (!access) return () => false
+    if (access.allSites) return () => true
+    const set = new Set(access.siteIds ?? [])
     return (siteId: string) => set.has(siteId)
-  }, [visibleSiteIds])
+  }, [access])
+
+  // department_code lookup, so pages can group/filter by department without
+  // a second round-trip — access.sites already carries it from GET /me.
+  const deptCodeBySite = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const s of access?.sites ?? []) map.set(s.id, s.department_code)
+    return map
+  }, [access])
 
   const sites = useMemo(
-    () => Object.values(sitesMap).filter((s) => isVisible(s.id)),
-    [sitesMap, isVisible]
+    () => Object.values(sitesMap)
+      .filter((s) => isVisible(s.id))
+      .map((s) => ({ ...s, department_code: deptCodeBySite.get(s.id) })),
+    [sitesMap, isVisible, deptCodeBySite]
+  )
+
+  // Distinct department codes among visible sites — pages use this to
+  // decide whether a department filter is worth showing at all.
+  const departmentCodes = useMemo(
+    () => [...new Set(sites.map((s) => s.department_code).filter((c): c is string => !!c))].sort(),
+    [sites]
   )
 
   const recentAlerts = useMemo<AlertEntry[]>(() => {
@@ -171,5 +171,5 @@ export function useFirebaseData() {
 
   const activeAlertCount = sites.filter((s) => s.alert).length
 
-  return { sites, recentAlerts, hq, activeAlertCount }
+  return { sites, recentAlerts, activeAlertCount, departmentCodes }
 }

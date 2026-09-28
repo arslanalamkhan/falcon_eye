@@ -1,5 +1,6 @@
 const express = require('express')
 const { requireAuth } = require('../middleware/auth')
+const { getVisibleSiteIds } = require('../services/access')
 const sm   = require('../services/streamManager')
 const imou = require('../services/imouService')
 const pool = require('../db')
@@ -9,10 +10,19 @@ router.use(requireAuth)
 
 async function fetchCameraType(cameraId) {
   const { rows } = await pool.query(
-    'SELECT id, stream_type, imou_device_id, imou_channel_id FROM cameras WHERE id = $1 AND active = true',
+    'SELECT id, site_id, stream_type, imou_device_id, imou_channel_id FROM cameras WHERE id = $1 AND active = true',
     [cameraId]
   )
   return rows[0] || null
+}
+
+// A logged-in user could otherwise start/watch/stop the stream of any
+// camera ID regardless of which sites they're allowed to see — this closes
+// that gap by checking the camera's parent site against the actor's
+// visible-site set on every stream operation.
+async function assertCanViewCamera(req, cam) {
+  const visibleSiteIds = await getVisibleSiteIds(req.user)
+  return visibleSiteIds === null || visibleSiteIds.includes(cam.site_id)
 }
 
 // ── POST /api/streams/:cameraId/start ───────────────────────────────
@@ -22,6 +32,7 @@ router.post('/:cameraId/start', async (req, res) => {
   try {
     const cam = await fetchCameraType(cameraId)
     if (!cam) return res.status(404).json({ error: 'Camera not found' })
+    if (!(await assertCanViewCamera(req, cam))) return res.status(403).json({ error: 'Forbidden' })
 
     if (cam.stream_type === 'imou') {
       const url = await imou.getStreamUrl(cameraId, cam.imou_device_id, cam.imou_channel_id)
@@ -42,6 +53,7 @@ router.get('/:cameraId/status', async (req, res) => {
   try {
     const cam = await fetchCameraType(cameraId)
     if (!cam) return res.status(404).json({ error: 'Camera not found' })
+    if (!(await assertCanViewCamera(req, cam))) return res.status(403).json({ error: 'Forbidden' })
 
     if (cam.stream_type === 'imou') {
       const running = imou.isActive(cameraId)
@@ -65,6 +77,7 @@ router.delete('/:cameraId', async (req, res) => {
   if (isNaN(cameraId)) return res.status(400).json({ error: 'Invalid camera ID' })
   try {
     const cam = await fetchCameraType(cameraId)
+    if (cam && !(await assertCanViewCamera(req, cam))) return res.status(403).json({ error: 'Forbidden' })
     if (cam?.stream_type === 'imou') {
       await imou.releaseStream(cameraId, cam.imou_device_id)
     } else {

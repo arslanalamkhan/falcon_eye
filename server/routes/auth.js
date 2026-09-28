@@ -2,6 +2,8 @@ const express = require('express')
 const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken')
 const pool = require('../db')
+const { requireAuth } = require('../middleware/auth')
+const { getVisibleSites } = require('../services/access')
 
 const router = express.Router()
 
@@ -15,7 +17,10 @@ router.post('/login', async (req, res) => {
 
   try {
     const { rows } = await pool.query(
-      'SELECT id, email, password_hash, role, full_name FROM users WHERE email = $1',
+      `SELECT u.id, u.email, u.password_hash, u.role, u.full_name, u.active AS user_active,
+              d.active AS department_active
+         FROM users u JOIN departments d ON d.id = u.department_id
+        WHERE u.email = $1`,
       [email.toLowerCase().trim()]
     )
 
@@ -29,11 +34,14 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' })
     }
 
-    const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: '8h' }
-    )
+    if (!user.user_active || !user.department_active) {
+      return res.status(401).json({ error: 'This account has been deactivated' })
+    }
+
+    // JWT carries only the id — role/department/active are always loaded
+    // fresh from the DB on each request (see middleware/auth.js) so
+    // revocation is immediate, not bound by the 8h token lifetime.
+    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '8h' })
 
     res.json({
       token,
@@ -46,7 +54,7 @@ router.post('/login', async (req, res) => {
 })
 
 // PATCH /api/auth/password  (change own password — requires current password)
-router.patch('/password', require('../middleware/auth').requireAuth, async (req, res) => {
+router.patch('/password', requireAuth, async (req, res) => {
   const { currentPassword, newPassword } = req.body
   if (!currentPassword || !newPassword) {
     return res.status(400).json({ error: 'currentPassword and newPassword are required' })
@@ -70,15 +78,20 @@ router.patch('/password', require('../middleware/auth').requireAuth, async (req,
   }
 })
 
-// GET /api/auth/me  (verify token + return user)
-router.get('/me', require('../middleware/auth').requireAuth, async (req, res) => {
+// GET /api/auth/me  (verify token + return user, department, and visible-site access)
+router.get('/me', requireAuth, async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      'SELECT id, email, role, full_name FROM users WHERE id = $1',
-      [req.user.id]
-    )
-    if (!rows[0]) return res.status(404).json({ error: 'User not found' })
-    res.json({ user: rows[0] })
+    const { allSites, siteIds, sites } = await getVisibleSites(req.user)
+    res.json({
+      user: {
+        id: req.user.id,
+        email: req.user.email,
+        role: req.user.role,
+        full_name: req.user.full_name,
+      },
+      department: req.user.department,
+      access: { allSites, siteIds, sites },
+    })
   } catch (err) {
     res.status(500).json({ error: 'Server error' })
   }

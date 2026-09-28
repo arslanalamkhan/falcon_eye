@@ -5,86 +5,54 @@ import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
-} from "@/components/ui/dialog"
-import {
-  GitBranch, Train, HardHat, Radio, Satellite, Plus, Trash2, Camera,
-  Loader2, Check, X, RefreshCw, AlertCircle, Users, ShieldCheck, KeyRound, Eye,
+  GitBranch, Train, Radio, Camera, Users, Building2, ScrollText,
+  Loader2, RefreshCw, AlertCircle, ShieldCheck,
 } from "lucide-react"
-import type { Role } from "@/contexts/AuthContext"
+import { ROLE_LABELS } from "@/types/access"
+import { ROLE_BADGE_VARIANT, CountBadge } from "@/components/admin/shared"
+import { RoutingMatrix } from "@/components/admin/RoutingMatrix"
+import { SitesPanel } from "@/components/admin/SitesPanel"
+import { ReceiversPanel } from "@/components/admin/ReceiversPanel"
+import { CamerasPanel } from "@/components/admin/CamerasPanel"
+import { UsersPanel } from "@/components/admin/UsersPanel"
+import { DepartmentsPanel } from "@/components/admin/DepartmentsPanel"
+import { AuditPanel } from "@/components/admin/AuditPanel"
+import type { AdminData, DepartmentRow, RouteKey } from "@/components/admin/types"
+import { rk } from "@/components/admin/types"
 
-// ── Types ─────────────────────────────────────────────────────────
-type Site = {
-  id: string; label: string; type: string; region: string; active: boolean
-  source: string; owner_id: number | null; owner_name: string | null
-}
-type Receiver = {
-  id: string; label: string; lea: string; city: string; active: boolean
-  owner_id: number | null; owner_name: string | null
-}
-type CameraRow = {
-  id: number; site_id: string; label: string; ip: string | null; port: number
-  channel: number; subtype: number; active: boolean; site_label: string; site_type: string
-  stream_type: string; imou_device_id: string | null; imou_channel_id: string
-  site_owner_id: number | null
-}
-type UserRow = {
-  id: number; email: string; full_name: string; role: Role; created_at: string
-}
-type AdminData = { sites: Site[]; receivers: Receiver[]; routes: { site_id: string; receiver_id: string }[] }
+type Tab = 'departments' | 'matrix' | 'sites' | 'receivers' | 'cameras' | 'users' | 'audit'
 
-type RouteKey = string   // `${siteId}:${receiverId}`
-
-// ── Helpers ───────────────────────────────────────────────────────
-const TAB_IDS = ['matrix', 'sites', 'receivers', 'cameras', 'users'] as const
-type Tab = typeof TAB_IDS[number]
-
-const SITE_TYPE_ICON = { train: Train, mine: HardHat, other: Radio }
-
-function siteIcon(type: string) {
-  const Icon = SITE_TYPE_ICON[type as keyof typeof SITE_TYPE_ICON] ?? Radio
-  return <Icon className="h-3.5 w-3.5" />
-}
-
-function rk(siteId: string, receiverId: string): RouteKey { return `${siteId}:${receiverId}` }
-
-const ROLE_LABELS: Record<Role, string> = {
-  admin:      'Admin',
-  supervisor: 'Supervisor',
-  operator:   'Operator',
-}
-
-const ROLE_BADGE_VARIANT: Record<Role, 'danger' | 'warning' | 'info'> = {
-  admin:      'danger',
-  supervisor: 'warning',
-  operator:   'info',
-}
-
-// ── Main component ────────────────────────────────────────────────
 export default function Admin() {
-  const { user } = useAuth()
-  const isAdmin  = user?.role === 'admin'
+  const { user, department } = useAuth()
+  const isSuper = user?.role === 'super_admin'
+  const currentDeptId = department!.id
 
-  const [tab, setTab]           = useState<Tab>('matrix')
+  const [tab, setTab]           = useState<Tab>(isSuper ? 'departments' : 'matrix')
   const [data, setData]         = useState<AdminData | null>(null)
+  const [departments, setDepartments] = useState<DepartmentRow[]>([])
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState('')
   const [activeRoutes, setActiveRoutes] = useState<Set<RouteKey>>(new Set())
   const [busyCells, setBusyCells]       = useState<Set<RouteKey>>(new Set())
+  const [deptFilter, setDeptFilter]     = useState<number | 'all'>('all')
 
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
-      const d = await api.get<AdminData>('/api/admin/data')
+      const [d, depts] = await Promise.all([
+        api.get<AdminData>('/api/admin/data'),
+        isSuper ? api.get<DepartmentRow[]>('/api/departments') : Promise.resolve([]),
+      ])
       setData(d)
+      setDepartments(depts)
       setActiveRoutes(new Set(d.routes.map(r => rk(r.site_id, r.receiver_id))))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [isSuper])
 
   useEffect(() => { load() }, [load])
 
@@ -129,15 +97,19 @@ export default function Admin() {
     </div>
   )
 
-  const { sites, receivers } = data!
+  const { sites: allSites, receivers: allReceivers } = data!
+  const sites     = deptFilter === 'all' ? allSites     : allSites.filter(s => s.department_id === deptFilter)
+  const receivers = deptFilter === 'all' ? allReceivers : allReceivers.filter(r => r.department_id === deptFilter)
 
-  const tabs = [
+  const tabs: { id: Tab; label: string; icon: React.ElementType }[] = [
+    ...(isSuper ? [{ id: 'departments' as Tab, label: 'Departments', icon: Building2 }] : []),
     { id: 'matrix',    label: 'Routing Matrix', icon: GitBranch },
     { id: 'sites',     label: 'Sites',          icon: Train      },
     { id: 'receivers', label: 'HQ Receivers',   icon: Radio      },
-    { id: 'cameras',   label: 'Cameras',         icon: Camera     },
-    ...(isAdmin ? [{ id: 'users', label: 'Users', icon: Users }] : []),
-  ] as const
+    { id: 'cameras',   label: 'Cameras',        icon: Camera     },
+    { id: 'users',     label: 'Users',          icon: Users      },
+    { id: 'audit',     label: 'Audit Log',      icon: ScrollText },
+  ]
 
   return (
     <div className="space-y-5">
@@ -147,10 +119,20 @@ export default function Admin() {
         <div>
           <h1 className="text-xl font-bold text-foreground">Admin Panel</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Manage alert routing, sites, HQ receivers, and users
+            Manage departments, alert routing, sites, HQ receivers, and users
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {isSuper && (
+            <select
+              value={deptFilter}
+              onChange={e => setDeptFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+              className="h-8 rounded-md border border-input bg-background px-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            >
+              <option value="all">All Departments</option>
+              {departments.map(d => <option key={d.id} value={d.id}>{d.code}</option>)}
+            </select>
+          )}
           <Badge variant={ROLE_BADGE_VARIANT[user!.role]} className="text-[11px] gap-1.5">
             <ShieldCheck className="h-3 w-3" />
             {ROLE_LABELS[user!.role]}
@@ -163,13 +145,13 @@ export default function Admin() {
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-border gap-1">
+      <div className="flex border-b border-border gap-1 overflow-x-auto">
         {tabs.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
-            onClick={() => setTab(id as Tab)}
+            onClick={() => setTab(id)}
             className={cn(
-              "flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors",
+              "flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap",
               tab === id
                 ? "border-primary text-primary"
                 : "border-transparent text-muted-foreground hover:text-foreground"
@@ -179,977 +161,19 @@ export default function Admin() {
             {label}
             {id === 'sites'     && <CountBadge n={sites.length} />}
             {id === 'receivers' && <CountBadge n={receivers.length} />}
+            {id === 'departments' && <CountBadge n={departments.length} />}
           </button>
         ))}
       </div>
 
       {/* Tab content */}
-      {tab === 'matrix'    && <RoutingMatrix sites={sites} receivers={receivers} activeRoutes={activeRoutes} busyCells={busyCells} onToggle={toggleRoute} isAdmin={isAdmin} currentUserId={user!.id} />}
-      {tab === 'sites'     && <SitesPanel    sites={sites}     onRefresh={load} isAdmin={isAdmin} currentUserId={user!.id} />}
-      {tab === 'receivers' && <ReceiversPanel receivers={receivers} onRefresh={load} isAdmin={isAdmin} currentUserId={user!.id} />}
-      {tab === 'cameras'   && <CamerasPanel  sites={sites} isAdmin={isAdmin} currentUserId={user!.id} />}
-      {tab === 'users'     && isAdmin && <UsersPanel currentUserId={user!.id} />}
+      {tab === 'departments' && isSuper && <DepartmentsPanel departments={departments} onRefresh={load} />}
+      {tab === 'matrix'    && <RoutingMatrix sites={sites} receivers={receivers} activeRoutes={activeRoutes} busyCells={busyCells} onToggle={toggleRoute} isSuper={isSuper} currentDeptId={currentDeptId} />}
+      {tab === 'sites'     && <SitesPanel    sites={sites}     onRefresh={load} isSuper={isSuper} currentDeptId={currentDeptId} departments={departments} />}
+      {tab === 'receivers' && <ReceiversPanel receivers={receivers} onRefresh={load} isSuper={isSuper} currentDeptId={currentDeptId} departments={departments} />}
+      {tab === 'cameras'   && <CamerasPanel  sites={sites} isSuper={isSuper} currentDeptId={currentDeptId} />}
+      {tab === 'users'     && <UsersPanel currentUserId={user!.id} isSuper={isSuper} currentDeptId={currentDeptId} departments={departments} sites={allSites} />}
+      {tab === 'audit'     && <AuditPanel isSuper={isSuper} />}
     </div>
-  )
-}
-
-function CountBadge({ n }: { n: number }) {
-  return (
-    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">{n}</span>
-  )
-}
-
-
-// ── Routing Matrix ─────────────────────────────────────────────────
-function RoutingMatrix({ sites, receivers, activeRoutes, busyCells, onToggle, isAdmin, currentUserId }: {
-  sites: Site[]; receivers: Receiver[]
-  activeRoutes: Set<RouteKey>; busyCells: Set<RouteKey>
-  onToggle: (siteId: string, receiverId: string) => void
-  isAdmin: boolean; currentUserId: number
-}) {
-  const activeCount = activeRoutes.size
-
-  return (
-    <div className="space-y-3">
-      <p className="text-xs text-muted-foreground">
-        Click a cell to enable or disable that route. Changes sync to Firebase immediately.&nbsp;
-        <span className="text-foreground font-medium">{activeCount} active route{activeCount !== 1 ? 's' : ''}</span>.
-      </p>
-
-      <div className="overflow-x-auto rounded-lg border border-border">
-        <table className="w-full text-sm">
-
-          <thead className="bg-muted/30">
-            <tr>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground w-52">
-                Site → Receiver
-              </th>
-              {receivers.map(r => (
-                <th key={r.id} className="px-3 py-3 text-center min-w-[130px]">
-                  <div className="flex flex-col items-center gap-0.5">
-                    <span className="text-xs font-semibold text-foreground truncate max-w-[120px]">{r.label}</span>
-                    <span className="text-[10px] text-muted-foreground">{r.city}</span>
-                  </div>
-                </th>
-              ))}
-            </tr>
-          </thead>
-
-          <tbody className="divide-y divide-border">
-            {sites.map((site, i) => {
-              const canEdit = isAdmin || site.owner_id === currentUserId
-              return (
-              <tr key={site.id} className={i % 2 === 0 ? '' : 'bg-muted/10'}>
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-muted-foreground">{siteIcon(site.type)}</span>
-                    <div>
-                      <p className="text-xs font-medium text-foreground">{site.label}</p>
-                      <p className="text-[10px] font-mono text-muted-foreground">{site.id}</p>
-                    </div>
-                  </div>
-                </td>
-
-                {receivers.map(r => {
-                  const key     = rk(site.id, r.id)
-                  const enabled = activeRoutes.has(key)
-                  const busy    = busyCells.has(key)
-                  return (
-                    <td key={r.id} className="px-3 py-3 text-center">
-                      <button
-                        onClick={() => onToggle(site.id, r.id)}
-                        disabled={busy || !canEdit}
-                        title={!canEdit ? 'Only the site owner or an admin can edit routing' : enabled ? 'Click to disable route' : 'Click to enable route'}
-                        className={cn(
-                          "mx-auto flex h-8 w-8 items-center justify-center rounded-full border-2 transition-all",
-                          enabled
-                            ? "border-emerald-500 bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25"
-                            : "border-border bg-transparent text-muted-foreground/40 hover:border-muted-foreground hover:text-muted-foreground",
-                          busy && "opacity-60 cursor-wait",
-                          !canEdit && "opacity-40 cursor-not-allowed"
-                        )}
-                      >
-                        {busy
-                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          : enabled
-                            ? <Check className="h-3.5 w-3.5" />
-                            : <X className="h-3 w-3" />
-                        }
-                      </button>
-                    </td>
-                  )
-                })}
-              </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
-// ── Sites Panel ────────────────────────────────────────────────────
-function SitesPanel({ sites, onRefresh, isAdmin, currentUserId }: {
-  sites: Site[]; onRefresh: () => void; isAdmin: boolean; currentUserId: number
-}) {
-  const emptyForm = { id: '', label: '', type: 'train', region: '', source: 'cellular', mobile_id: '', imo: '', mmsi: '' }
-  const [form, setForm] = useState(emptyForm)
-  const [saving, setSaving] = useState(false)
-  const [deleting, setDeleting] = useState<string | null>(null)
-  const [formErr, setFormErr] = useState('')
-  const [visTarget, setVisTarget] = useState<{ id: string; label: string } | null>(null)
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setFormErr('')
-    setSaving(true)
-    try {
-      await api.post('/api/admin/sites', form)
-      setForm(emptyForm)
-      onRefresh()
-    } catch (err) {
-      setFormErr(err instanceof Error ? err.message : 'Failed')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const del = async (id: string) => {
-    setDeleting(id)
-    try { await api.delete(`/api/admin/sites/${id}`); onRefresh() }
-    catch { /* ignore */ }
-    finally { setDeleting(null) }
-  }
-
-  return (
-    <div className="space-y-5">
-      <div className="rounded-lg border border-border bg-card p-4">
-        <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
-          <Plus className="h-4 w-4 text-primary" /> Add Site
-        </h3>
-        <form onSubmit={submit} className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <FormField label="Site ID" value={form.id} onChange={v => setForm(f => ({ ...f, id: v }))} placeholder="khyber_express" required mono />
-          <FormField label="Label" value={form.label} onChange={v => setForm(f => ({ ...f, label: v }))} placeholder="Khyber Express" required />
-          <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Type</label>
-            <select
-              value={form.type}
-              onChange={e => setForm(f => ({ ...f, type: e.target.value }))}
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-            >
-              <option value="train">Train</option>
-              <option value="mine">Mining Site</option>
-              <option value="other">Other</option>
-            </select>
-          </div>
-          <FormField label="Region" value={form.region} onChange={v => setForm(f => ({ ...f, region: v }))} placeholder="KP/Punjab" />
-          <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Tracking Hardware</label>
-            <select
-              value={form.source}
-              onChange={e => setForm(f => ({ ...f, source: e.target.value }))}
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-            >
-              <option value="cellular">Cellular (ESP32 panic button)</option>
-              <option value="satellite_fms">Satellite (Falcon Mega Track)</option>
-            </select>
-          </div>
-          {form.source === 'satellite_fms' && (
-            <>
-              <FormField label="Mobile ID" value={form.mobile_id} onChange={v => setForm(f => ({ ...f, mobile_id: v }))} placeholder="01398397SKY12AE" required mono />
-              <FormField label="IMO (optional)" value={form.imo} onChange={v => setForm(f => ({ ...f, imo: v }))} placeholder="rarely set on ground terminals" mono />
-              <FormField label="MMSI (optional)" value={form.mmsi} onChange={v => setForm(f => ({ ...f, mmsi: v }))} placeholder="rarely set on ground terminals" mono />
-              <p className="col-span-2 md:col-span-4 text-[11px] text-muted-foreground -mt-1">
-                Mobile ID is the terminal's own hardware serial (shown as "MobileID" in Falcon Mega Track's data) and is required to match incoming reports to this site. IMO/MMSI are optional — these terminals report placeholder values for them, not real ship identifiers.
-              </p>
-            </>
-          )}
-          <div className="col-span-2 md:col-span-4 flex items-center gap-3">
-            <Button type="submit" size="sm" disabled={saving}>
-              {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-1.5" />}
-              Add Site
-            </Button>
-            {formErr && <p className="text-xs text-destructive">{formErr}</p>}
-          </div>
-        </form>
-      </div>
-
-      <EntityTable
-        columns={['Site ID', 'Label', 'Type', 'Source', 'Region', 'Owner']}
-        rows={sites.map(s => ({
-          key: s.id,
-          cells: [
-            <code className="text-[11px] text-primary">{s.id}</code>,
-            s.label,
-            <Badge variant={s.type === 'train' ? 'info' : 'warning'} className="text-[10px]">{s.type}</Badge>,
-            s.source === 'satellite_fms'
-              ? <Badge variant="info" className="text-[10px] gap-1"><Satellite className="h-2.5 w-2.5" />Satellite</Badge>
-              : <span className="text-[11px] text-muted-foreground">Cellular</span>,
-            s.region || '—',
-            s.owner_id === currentUserId ? 'You' : (s.owner_name || '—'),
-          ],
-        }))}
-        onDelete={del}
-        deletingId={deleting}
-        canDelete={(id) => {
-          const s = sites.find(x => x.id === id)
-          return isAdmin || s?.owner_id === currentUserId
-        }}
-        extraAction={isAdmin ? (id) => {
-          const s = sites.find(x => x.id === id)
-          if (s) setVisTarget({ id: s.id, label: s.label })
-        } : undefined}
-      />
-
-      {visTarget && (
-        <VisibilityDialog kind="sites" id={visTarget.id} label={visTarget.label} onClose={() => setVisTarget(null)} />
-      )}
-    </div>
-  )
-}
-
-// ── Receivers Panel ────────────────────────────────────────────────
-function ReceiversPanel({ receivers, onRefresh, isAdmin, currentUserId }: {
-  receivers: Receiver[]; onRefresh: () => void; isAdmin: boolean; currentUserId: number
-}) {
-  const [form, setForm] = useState({ id: '', label: '', lea: '', city: '' })
-  const [saving, setSaving] = useState(false)
-  const [deleting, setDeleting] = useState<string | null>(null)
-  const [formErr, setFormErr] = useState('')
-  const [visTarget, setVisTarget] = useState<{ id: string; label: string } | null>(null)
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setFormErr('')
-    setSaving(true)
-    try {
-      await api.post('/api/admin/receivers', form)
-      setForm({ id: '', label: '', lea: '', city: '' })
-      onRefresh()
-    } catch (err) {
-      setFormErr(err instanceof Error ? err.message : 'Failed')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const del = async (id: string) => {
-    setDeleting(id)
-    try { await api.delete(`/api/admin/receivers/${id}`); onRefresh() }
-    catch { /* ignore */ }
-    finally { setDeleting(null) }
-  }
-
-  return (
-    <div className="space-y-5">
-      <div className="rounded-lg border border-border bg-card p-4">
-        <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
-          <Plus className="h-4 w-4 text-primary" /> Add HQ Receiver
-        </h3>
-        <form onSubmit={submit} className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <FormField label="Receiver ID" value={form.id} onChange={v => setForm(f => ({ ...f, id: v }))} placeholder="isi_rawalpindi" required mono />
-          <FormField label="Label" value={form.label} onChange={v => setForm(f => ({ ...f, label: v }))} placeholder="ISI HQ Rawalpindi" required />
-          <FormField label="LEA / Agency" value={form.lea} onChange={v => setForm(f => ({ ...f, lea: v }))} placeholder="ISI" />
-          <FormField label="City" value={form.city} onChange={v => setForm(f => ({ ...f, city: v }))} placeholder="Rawalpindi" />
-          <div className="col-span-2 md:col-span-4 flex items-center gap-3">
-            <Button type="submit" size="sm" disabled={saving}>
-              {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-1.5" />}
-              Add Receiver
-            </Button>
-            {formErr && <p className="text-xs text-destructive">{formErr}</p>}
-          </div>
-        </form>
-      </div>
-
-      <EntityTable
-        columns={['Receiver ID', 'Label', 'LEA', 'City', 'Owner']}
-        rows={receivers.map(r => ({
-          key: r.id,
-          cells: [
-            <code className="text-[11px] text-primary">{r.id}</code>,
-            r.label,
-            r.lea  || '—',
-            r.city || '—',
-            r.owner_id === currentUserId ? 'You' : (r.owner_name || '—'),
-          ],
-        }))}
-        onDelete={del}
-        deletingId={deleting}
-        canDelete={(id) => {
-          const r = receivers.find(x => x.id === id)
-          return isAdmin || r?.owner_id === currentUserId
-        }}
-        extraAction={isAdmin ? (id) => {
-          const r = receivers.find(x => x.id === id)
-          if (r) setVisTarget({ id: r.id, label: r.label })
-        } : undefined}
-      />
-
-      {visTarget && (
-        <VisibilityDialog kind="receivers" id={visTarget.id} label={visTarget.label} onClose={() => setVisTarget(null)} />
-      )}
-    </div>
-  )
-}
-
-// ── Users Panel ────────────────────────────────────────────────────
-function UsersPanel({ currentUserId }: { currentUserId: number }) {
-  const [users, setUsers]       = useState<UserRow[]>([])
-  const [loading, setLoading]   = useState(true)
-  const [deleting, setDeleting] = useState<number | null>(null)
-  const [changingRole, setChangingRole] = useState<number | null>(null)
-  const [resetTarget, setResetTarget]   = useState<{ id: number; name: string } | null>(null)
-  const [form, setForm]         = useState({ email: '', full_name: '', password: '', role: 'operator' as Role })
-  const [saving, setSaving]     = useState(false)
-  const [formErr, setFormErr]   = useState('')
-
-  const loadUsers = async () => {
-    setLoading(true)
-    try {
-      const rows = await api.get<UserRow[]>('/api/admin/users')
-      setUsers(rows)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => { loadUsers() }, [])
-
-  const createUser = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setFormErr('')
-    setSaving(true)
-    try {
-      await api.post('/api/admin/users', form)
-      setForm({ email: '', full_name: '', password: '', role: 'operator' })
-      await loadUsers()
-    } catch (err) {
-      setFormErr(err instanceof Error ? err.message : 'Failed')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const deleteUser = async (id: number) => {
-    setDeleting(id)
-    try { await api.delete(`/api/admin/users/${id}`); await loadUsers() }
-    catch { /* ignore */ }
-    finally { setDeleting(null) }
-  }
-
-  const changeRole = async (id: number, role: Role) => {
-    setChangingRole(id)
-    try {
-      await api.patch(`/api/admin/users/${id}/role`, { role })
-      setUsers(prev => prev.map(u => u.id === id ? { ...u, role } : u))
-    } catch { /* ignore */ }
-    finally { setChangingRole(null) }
-  }
-
-  return (
-    <div className="space-y-5">
-      {/* Add user form */}
-      <div className="rounded-lg border border-border bg-card p-4">
-        <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
-          <Plus className="h-4 w-4 text-primary" /> Add User
-        </h3>
-        <form onSubmit={createUser} className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <FormField
-            label="Full Name"
-            value={form.full_name}
-            onChange={v => setForm(f => ({ ...f, full_name: v }))}
-            placeholder="Ali Khan"
-            required
-          />
-          <FormField
-            label="Email"
-            value={form.email}
-            onChange={v => setForm(f => ({ ...f, email: v }))}
-            placeholder="ali@nacta.gov.pk"
-            required
-          />
-          <FormField
-            label="Password"
-            value={form.password}
-            onChange={v => setForm(f => ({ ...f, password: v }))}
-            placeholder="Min. 8 characters"
-            required
-            type="password"
-          />
-          <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Role</label>
-            <select
-              value={form.role}
-              onChange={e => setForm(f => ({ ...f, role: e.target.value as Role }))}
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-            >
-              <option value="operator">Operator</option>
-              <option value="supervisor">Supervisor</option>
-              <option value="admin">Admin</option>
-            </select>
-          </div>
-          <div className="col-span-2 md:col-span-4 flex items-center gap-3">
-            <Button type="submit" size="sm" disabled={saving}>
-              {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-1.5" />}
-              Add User
-            </Button>
-            {formErr && <p className="text-xs text-destructive">{formErr}</p>}
-          </div>
-        </form>
-      </div>
-
-      {/* Users table */}
-      {loading ? (
-        <div className="flex h-32 items-center justify-center gap-3 text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          <span className="text-sm">Loading users…</span>
-        </div>
-      ) : users.length === 0 ? (
-        <div className="rounded-lg border border-border py-12 text-center text-sm text-muted-foreground">
-          No users yet.
-        </div>
-      ) : (
-        <div className="rounded-lg border border-border overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/30">
-              <tr>
-                {['Name', 'Email', 'Role', 'Joined'].map(h => (
-                  <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">{h}</th>
-                ))}
-                <th className="px-4 py-2.5 w-20" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {users.map(u => {
-                const isSelf = u.id === currentUserId
-                return (
-                  <tr key={u.id} className="hover:bg-muted/20 transition-colors">
-                    <td className="px-4 py-3 text-foreground font-medium">
-                      {u.full_name}
-                      {isSelf && <span className="ml-2 text-[10px] text-muted-foreground">(you)</span>}
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground font-mono text-xs">{u.email}</td>
-                    <td className="px-4 py-3">
-                      {isSelf ? (
-                        <Badge variant={ROLE_BADGE_VARIANT[u.role]} className="text-[10px]">
-                          {ROLE_LABELS[u.role]}
-                        </Badge>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <select
-                            value={u.role}
-                            disabled={changingRole === u.id}
-                            onChange={e => changeRole(u.id, e.target.value as Role)}
-                            className="h-7 rounded border border-input bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
-                          >
-                            <option value="operator">Operator</option>
-                            <option value="supervisor">Supervisor</option>
-                            <option value="admin">Admin</option>
-                          </select>
-                          {changingRole === u.id && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">
-                      {new Date(u.created_at).toLocaleDateString('en-PK', { year: 'numeric', month: 'short', day: 'numeric' })}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => setResetTarget({ id: u.id, name: u.full_name })}
-                          className="text-muted-foreground hover:text-primary transition-colors"
-                          title="Reset password"
-                        >
-                          <KeyRound className="h-3.5 w-3.5" />
-                        </button>
-                        {!isSelf && (
-                          <button
-                            onClick={() => deleteUser(u.id)}
-                            disabled={deleting === u.id}
-                            className="text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
-                            title="Delete user"
-                          >
-                            {deleting === u.id
-                              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              : <Trash2 className="h-3.5 w-3.5" />}
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {resetTarget && (
-        <AdminResetPasswordDialog
-          userId={resetTarget.id}
-          userName={resetTarget.name}
-          onClose={() => setResetTarget(null)}
-        />
-      )}
-    </div>
-  )
-}
-
-// ── Admin reset-password dialog (no current password needed) ───────
-function AdminResetPasswordDialog({ userId, userName, onClose }: {
-  userId: number
-  userName: string
-  onClose: () => void
-}) {
-  const [newPassword, setNewPassword] = useState('')
-  const [confirm, setConfirm]         = useState('')
-  const [saving, setSaving]           = useState(false)
-  const [err, setErr]                 = useState('')
-  const [success, setSuccess]         = useState(false)
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (newPassword !== confirm) { setErr('Passwords do not match'); return }
-    setErr('')
-    setSaving(true)
-    try {
-      await api.patch(`/api/admin/users/${userId}/password`, { newPassword })
-      setSuccess(true)
-      setTimeout(onClose, 1500)
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Failed')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Dialog open onOpenChange={open => { if (!open) onClose() }}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Reset Password</DialogTitle>
-          <DialogDescription>Set a new password for {userName}</DialogDescription>
-        </DialogHeader>
-
-        {success ? (
-          <div className="flex items-center gap-2 py-2 text-sm text-emerald-400">
-            <Check className="h-4 w-4" /> Password updated successfully
-          </div>
-        ) : (
-          <form onSubmit={submit} className="space-y-3">
-            <FormField label="New Password" value={newPassword} onChange={setNewPassword} type="password" placeholder="Min. 8 characters" required />
-            <FormField label="Confirm Password" value={confirm} onChange={setConfirm} type="password" placeholder="Repeat new password" required />
-            {err && <p className="text-xs text-destructive">{err}</p>}
-            <div className="flex justify-end gap-2 pt-1">
-              <button
-                type="button"
-                onClick={onClose}
-                className="h-8 px-3 rounded-md border border-input text-xs text-muted-foreground hover:text-foreground transition-colors"
-              >
-                Cancel
-              </button>
-              <Button size="sm" type="submit" disabled={saving}>
-                {saving
-                  ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                  : <KeyRound className="h-3.5 w-3.5 mr-1.5" />}
-                Set Password
-              </Button>
-            </div>
-          </form>
-        )}
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-// ── Cameras Panel ──────────────────────────────────────────────────
-function CamerasPanel({ sites, isAdmin, currentUserId }: { sites: Site[]; isAdmin: boolean; currentUserId: number }) {
-  const manageableSites = sites.filter(s => isAdmin || s.owner_id === currentUserId)
-  const [cameras, setCameras]   = useState<CameraRow[]>([])
-  const [loading, setLoading]   = useState(true)
-  const [deleting, setDeleting] = useState<number | null>(null)
-  const [saving, setSaving]     = useState(false)
-  const [formErr, setFormErr]   = useState('')
-  const [form, setForm] = useState({
-    site_id: '', label: 'Camera', stream_type: 'rtsp',
-    // RTSP fields
-    ip: '', port: '554', username: '', password: '', channel: '1', subtype: '0',
-    // IMOU fields
-    imou_device_id: '', imou_channel_id: '0',
-  })
-
-  const loadCameras = async () => {
-    setLoading(true)
-    try {
-      const rows = await api.get<CameraRow[]>('/api/cameras/all')
-      setCameras(rows)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => { loadCameras() }, [])
-
-  const addCamera = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setFormErr('')
-    setSaving(true)
-    try {
-      const payload = form.stream_type === 'imou'
-        ? {
-            site_id: form.site_id, label: form.label, stream_type: 'imou',
-            imou_device_id: form.imou_device_id, imou_channel_id: form.imou_channel_id,
-          }
-        : {
-            site_id: form.site_id, label: form.label, stream_type: 'rtsp',
-            ip: form.ip, port: parseInt(form.port) || 554,
-            username: form.username, password: form.password,
-            channel: parseInt(form.channel) || 1, subtype: parseInt(form.subtype) || 0,
-          }
-      await api.post('/api/cameras', payload)
-      setForm({
-        site_id: form.site_id, label: 'Camera', stream_type: form.stream_type,
-        ip: '', port: '554', username: '', password: '', channel: '1', subtype: '0',
-        imou_device_id: '', imou_channel_id: '0',
-      })
-      await loadCameras()
-    } catch (err) {
-      setFormErr(err instanceof Error ? err.message : 'Failed')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const del = async (id: number) => {
-    setDeleting(id)
-    try { await api.delete(`/api/cameras/${id}`); await loadCameras() }
-    catch { /* ignore */ }
-    finally { setDeleting(null) }
-  }
-
-  return (
-    <div className="space-y-5">
-      {manageableSites.length === 0 ? (
-        <div className="rounded-lg border border-border bg-card p-4 text-xs text-muted-foreground">
-          Add a site you own before attaching a camera to it.
-        </div>
-      ) : (
-        <div className="rounded-lg border border-border bg-card p-4">
-          <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
-            <Plus className="h-4 w-4 text-primary" /> Add Camera
-          </h3>
-          <form onSubmit={addCamera} className="space-y-3">
-            {/* Row 1: Site, Label, Stream Type */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <div className="flex flex-col gap-1">
-                <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Site</label>
-                <select
-                  value={form.site_id}
-                  onChange={e => setForm(f => ({ ...f, site_id: e.target.value }))}
-                  required
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                >
-                  <option value="" disabled>Select site…</option>
-                  {manageableSites.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
-                </select>
-              </div>
-              <FormField label="Label" value={form.label} onChange={v => setForm(f => ({ ...f, label: v }))} placeholder="Camera 1" required />
-              <div className="flex flex-col gap-1">
-                <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Stream Type</label>
-                <select
-                  value={form.stream_type}
-                  onChange={e => setForm(f => ({ ...f, stream_type: e.target.value }))}
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                >
-                  <option value="rtsp">RTSP (Local / IP Camera)</option>
-                  <option value="imou">IMOU Cloud</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Row 2: Type-specific fields */}
-            {form.stream_type === 'imou' ? (
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <FormField
-                  label="IMOU Device ID"
-                  value={form.imou_device_id}
-                  onChange={v => setForm(f => ({ ...f, imou_device_id: v }))}
-                  placeholder="e.g. AABHD12345678901"
-                  required mono
-                />
-                <FormField
-                  label="Channel ID"
-                  value={form.imou_channel_id}
-                  onChange={v => setForm(f => ({ ...f, imou_channel_id: v }))}
-                  placeholder="0"
-                  mono
-                />
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <FormField label="IP Address" value={form.ip} onChange={v => setForm(f => ({ ...f, ip: v }))} placeholder="192.168.1.100" required mono />
-                <FormField label="Port" value={form.port} onChange={v => setForm(f => ({ ...f, port: v }))} placeholder="554" mono />
-                <FormField label="Username" value={form.username} onChange={v => setForm(f => ({ ...f, username: v }))} placeholder="admin" required />
-                <FormField label="Password" value={form.password} onChange={v => setForm(f => ({ ...f, password: v }))} type="password" placeholder="••••••••" required />
-                <FormField label="Channel" value={form.channel} onChange={v => setForm(f => ({ ...f, channel: v }))} placeholder="1" mono />
-                <FormField label="Subtype (0=main, 1=sub)" value={form.subtype} onChange={v => setForm(f => ({ ...f, subtype: v }))} placeholder="0" mono />
-              </div>
-            )}
-
-            <div className="flex items-center gap-3">
-              <Button type="submit" size="sm" disabled={saving}>
-                {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-1.5" />}
-                Add Camera
-              </Button>
-              {formErr && <p className="text-xs text-destructive">{formErr}</p>}
-            </div>
-          </form>
-        </div>
-      )}
-
-      {loading ? (
-        <div className="flex h-32 items-center justify-center gap-3 text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          <span className="text-sm">Loading cameras…</span>
-        </div>
-      ) : cameras.length === 0 ? (
-        <div className="rounded-lg border border-border py-12 text-center text-sm text-muted-foreground">
-          No cameras configured yet.
-        </div>
-      ) : (
-        <div className="rounded-lg border border-border overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/30">
-              <tr>
-                {['Site', 'Label', 'Type', 'Connection', 'Channel'].map(h => (
-                  <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">{h}</th>
-                ))}
-                <th className="px-4 py-2.5 w-10" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {cameras.map(cam => {
-                const canDelete = isAdmin || cam.site_owner_id === currentUserId
-                return (
-                <tr key={cam.id} className="hover:bg-muted/20 transition-colors">
-                  <td className="px-4 py-3">
-                    <div>
-                      <p className="text-xs font-medium text-foreground">{cam.site_label}</p>
-                      <p className="text-[10px] font-mono text-muted-foreground">{cam.site_id}</p>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-foreground text-xs">{cam.label}</td>
-                  <td className="px-4 py-3">
-                    <Badge variant={cam.stream_type === 'imou' ? 'success' : 'info'} className="text-[10px]">
-                      {cam.stream_type === 'imou' ? 'IMOU CLOUD' : 'RTSP'}
-                    </Badge>
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
-                    {cam.stream_type === 'imou'
-                      ? cam.imou_device_id
-                      : `${cam.ip}:${cam.port}`
-                    }
-                  </td>
-                  <td className="px-4 py-3 text-xs text-muted-foreground">
-                    {cam.stream_type === 'imou'
-                      ? `ch${cam.imou_channel_id}`
-                      : `ch${cam.channel} / sub${cam.subtype}`
-                    }
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    {canDelete && (
-                      <button
-                        onClick={() => del(cam.id)}
-                        disabled={deleting === cam.id}
-                        className="text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
-                      >
-                        {deleting === cam.id
-                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          : <Trash2 className="h-3.5 w-3.5" />}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Shared sub-components ──────────────────────────────────────────
-function FormField({ label, value, onChange, placeholder, required, mono, type = 'text' }: {
-  label: string; value: string; onChange: (v: string) => void
-  placeholder?: string; required?: boolean; mono?: boolean; type?: string
-}) {
-  return (
-    <div className="flex flex-col gap-1">
-      <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">{label}</label>
-      <input
-        type={type}
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        placeholder={placeholder}
-        required={required}
-        className={cn(
-          "h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary",
-          mono && "font-mono"
-        )}
-      />
-    </div>
-  )
-}
-
-function EntityTable({ columns, rows, onDelete, deletingId, canDelete, extraAction }: {
-  columns: string[]
-  rows: { key: string; cells: React.ReactNode[] }[]
-  onDelete?: (id: string) => void
-  deletingId: string | null
-  canDelete?: (id: string) => boolean
-  extraAction?: (id: string) => void
-}) {
-  if (rows.length === 0) return (
-    <div className="rounded-lg border border-border py-12 text-center text-sm text-muted-foreground">
-      No entries yet.
-    </div>
-  )
-  const hasActionsCol = !!onDelete || !!extraAction
-  return (
-    <div className="rounded-lg border border-border overflow-hidden">
-      <table className="w-full text-sm">
-        <thead className="bg-muted/30">
-          <tr>
-            {columns.map(c => (
-              <th key={c} className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">{c}</th>
-            ))}
-            {hasActionsCol && <th className="px-4 py-2.5 w-16" />}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border">
-          {rows.map(({ key, cells }) => (
-            <tr key={key} className="hover:bg-muted/20 transition-colors">
-              {cells.map((cell, i) => (
-                <td key={i} className="px-4 py-3 text-foreground">{cell}</td>
-              ))}
-              {hasActionsCol && (
-                <td className="px-4 py-3 text-right">
-                  <div className="flex items-center justify-end gap-2">
-                    {extraAction && (
-                      <button
-                        onClick={() => extraAction(key)}
-                        className="text-muted-foreground hover:text-primary transition-colors"
-                        title="Manage visibility"
-                      >
-                        <Eye className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                    {onDelete && (!canDelete || canDelete(key)) && (
-                      <button
-                        onClick={() => onDelete(key)}
-                        disabled={deletingId === key}
-                        className="text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
-                      >
-                        {deletingId === key
-                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          : <Trash2 className="h-3.5 w-3.5" />}
-                      </button>
-                    )}
-                  </div>
-                </td>
-              )}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-// ── Visibility grant dialog (admin only) ────────────────────────────
-function VisibilityDialog({ kind, id, label, onClose }: {
-  kind: 'sites' | 'receivers'; id: string; label: string; onClose: () => void
-}) {
-  const [allUsers, setAllUsers] = useState<UserRow[]>([])
-  const [granted, setGranted]   = useState<Set<number>>(new Set())
-  const [loading, setLoading]   = useState(true)
-  const [busy, setBusy]         = useState<number | null>(null)
-
-  useEffect(() => {
-    (async () => {
-      setLoading(true)
-      try {
-        const [users, grants] = await Promise.all([
-          api.get<UserRow[]>('/api/admin/users'),
-          api.get<{ id: number }[]>(`/api/admin/${kind}/${id}/visibility`),
-        ])
-        setAllUsers(users)
-        setGranted(new Set(grants.map(g => g.id)))
-      } finally {
-        setLoading(false)
-      }
-    })()
-  }, [kind, id])
-
-  const toggle = async (userId: number) => {
-    const wasGranted = granted.has(userId)
-    setBusy(userId)
-    try {
-      if (wasGranted) await api.delete(`/api/admin/${kind}/${id}/visibility/${userId}`)
-      else            await api.put(`/api/admin/${kind}/${id}/visibility/${userId}`)
-      setGranted(prev => {
-        const s = new Set(prev)
-        wasGranted ? s.delete(userId) : s.add(userId)
-        return s
-      })
-    } catch { /* ignore */ }
-    finally { setBusy(null) }
-  }
-
-  return (
-    <Dialog open onOpenChange={open => { if (!open) onClose() }}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Visibility</DialogTitle>
-          <DialogDescription>Choose which users can see "{label}"</DialogDescription>
-        </DialogHeader>
-
-        {loading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-          </div>
-        ) : allUsers.length === 0 ? (
-          <p className="text-xs text-muted-foreground py-4">No other users yet.</p>
-        ) : (
-          <div className="max-h-72 overflow-y-auto divide-y divide-border">
-            {allUsers.map(u => (
-              <label key={u.id} className="flex items-center justify-between gap-3 py-2 px-1 text-sm cursor-pointer">
-                <div className="min-w-0">
-                  <p className="text-foreground truncate">{u.full_name}</p>
-                  <p className="text-[11px] text-muted-foreground truncate">{u.email}</p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {busy === u.id && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
-                  <input
-                    type="checkbox"
-                    checked={granted.has(u.id)}
-                    disabled={busy === u.id}
-                    onChange={() => toggle(u.id)}
-                    className="h-4 w-4 accent-primary"
-                  />
-                </div>
-              </label>
-            ))}
-          </div>
-        )}
-
-        <div className="flex justify-end pt-2">
-          <Button size="sm" variant="outline" onClick={onClose}>Done</Button>
-        </div>
-      </DialogContent>
-    </Dialog>
   )
 }

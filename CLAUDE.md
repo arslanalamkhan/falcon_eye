@@ -10,9 +10,9 @@
 - A Node.js backend service (`alertRouter`) watches Firebase for alert state changes and dispatches to the correct receiver nodes based on routing rules stored in both PostgreSQL and Firebase (`routing/`).
 
 ### Stakeholders
-- Deployed for **NACTA** (National Counter Terrorism Authority)
-- Default admin: `admin@nacta.gov.pk`
-- Operational users: Control Room Operators, Site Supervisors, QRF Commanders
+- Deployed for **NACTA** (National Counter Terrorism Authority) as the head department, with other departments (Pakistan Railways, mining authorities, LEAs, etc.) onboarded as tenants
+- Super admin: `admin@nacta.gov.pk`
+- Operational users: Department Admins, Control Room Operators, Site Supervisors, QRF Commanders — see [Multi-Department Access Model](#multi-department-access-model)
 
 ---
 
@@ -42,18 +42,23 @@ falcon_eye/
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── layout/            # DashboardLayout, Topbar, Sidebar, ProtectedRoute
+│   │   │   ├── admin/             # Admin panel tabs (see Frontend Architecture below)
 │   │   │   └── ui/                # Shadcn-style primitives (Button, Badge, Avatar, etc.)
-│   │   ├── contexts/              # AuthContext
+│   │   ├── contexts/              # AuthContext (user + department + visible-site access)
 │   │   ├── hooks/
-│   │   │   └── useFirebaseData.ts # Live Firebase listener — sites, alerts, logs
+│   │   │   ├── useFirebaseData.ts      # Live Firebase listener — sites, alerts, logs
+│   │   │   └── useAlertNotification.ts # Live panic-alert popup queue
 │   │   ├── lib/
 │   │   │   ├── utils.ts           # cn() helper
 │   │   │   ├── firebase.ts        # Firebase app init + db export
 │   │   │   └── api.ts             # Central fetch client (JWT injection, 401 redirect)
+│   │   ├── types/
+│   │   │   └── access.ts          # Role, Department, Access — shared access-control types
 │   │   ├── pages/
 │   │   │   ├── Dashboard.tsx      # Live stats + alert feed from Firebase
 │   │   │   ├── LiveMap.tsx        # react-leaflet map with real-time site GPS markers
-│   │   │   ├── Admin.tsx          # Routing matrix + site/receiver management
+│   │   │   ├── Cameras.tsx        # Camera feed viewer
+│   │   │   ├── Admin.tsx          # Admin panel shell — tabs, department filter
 │   │   │   └── Login.tsx
 │   │   ├── App.tsx                # Router + AuthProvider tree
 │   │   ├── main.tsx               # React DOM entry
@@ -66,17 +71,24 @@ falcon_eye/
 │   ├── index.js                   # App entry — mounts routes, starts alertRouter, syncs routing
 │   ├── db.js                      # pg Pool singleton
 │   ├── middleware/
-│   │   └── auth.js                # JWT requireAuth middleware
+│   │   └── auth.js                # JWT requireAuth (loads actor from DB — see note below), requireRole
 │   ├── routes/
-│   │   ├── auth.js                # POST /api/auth/login, GET /api/auth/me
-│   │   └── admin.js               # /api/admin/* — sites, receivers, routing CRUD
+│   │   ├── auth.js                # POST /api/auth/login, GET/PATCH /api/auth/me, /password
+│   │   ├── departments.js         # /api/departments/* — department CRUD (super_admin only)
+│   │   ├── users.js                # /api/users/* — user CRUD, role/active changes, site grants
+│   │   ├── admin.js               # /api/admin/* — sites, receivers, routing CRUD, audit log
+│   │   ├── cameras.js             # /api/cameras/* — camera CRUD
+│   │   └── streams.js             # /api/streams/* — HLS stream start/status/stop
 │   ├── services/
 │   │   ├── firebase.js            # Shared Firebase Admin singleton (getFirebaseDb)
+│   │   ├── access.js              # Department-scoped visibility + management-permission checks
+│   │   ├── audit.js               # Fire-and-forget audit_log writer
 │   │   ├── alertRouter.js         # Watches sites/ in Firebase, dispatches to hq_receivers/
 │   │   └── routingSync.js         # Syncs PostgreSQL routing table → Firebase routing/ node
 │   └── scripts/
 │       ├── setup-db.js            # One-time DB bootstrap + admin user seed
-│       └── 002_routing_schema.js  # Adds sites, hq_receivers, site_receiver_routes tables
+│       ├── 002_routing_schema.js  # Adds sites, hq_receivers, site_receiver_routes tables
+│       └── 007_departments.js     # Adds departments, department_oversight, audit_log; department_id everywhere
 │
 ├── .env                           # DB URL, JWT secret, PORT, Firebase DB URL (never commit)
 ├── .gitignore                     # Includes client/.env, server/*-firebase-adminsdk-*.json
@@ -98,6 +110,9 @@ node server/scripts/setup-db.js          # Create DB + seed admin user (run once
 node server/scripts/002_routing_schema.js # Add routing tables + seed data (run once)
 node server/scripts/003_cameras_schema.js # Add cameras table (run once)
 node server/scripts/004_imou_schema.js    # Add IMOU columns to cameras (run once)
+node server/scripts/005_ownership_hierarchy.js  # Add owner_id + site_visibility_grants (run once)
+node server/scripts/006_fms_integration_schema.js # Add FMS satellite tracking tables (run once)
+node server/scripts/007_departments.js    # Add department model (departments, roles, audit_log) — run once
 
 # ── Start servers (two separate terminals) ─────────────────────────
 node server/index.js                     # API + alertRouter on port 3001
@@ -204,35 +219,75 @@ Neither `.env` file is committed. The Firebase Admin service account key (`serve
 ### Current Schema
 
 ```sql
+-- departments (tenancy boundary — added by 007_departments.js)
+id         SERIAL PRIMARY KEY
+code       TEXT UNIQUE NOT NULL                 -- e.g. 'NACTA', 'RAIL'
+name       TEXT NOT NULL
+view_scope TEXT NOT NULL DEFAULT 'own'          -- 'own' | 'all' | 'selected' — see access model below
+is_head    BOOLEAN NOT NULL DEFAULT false        -- true only for NACTA; cannot be deleted/deactivated
+active     BOOLEAN NOT NULL DEFAULT true         -- false blocks login for every user in this dept
+created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+
+-- department_oversight (view_scope='selected' targets — which other depts a dept can see)
+viewer_department_id INTEGER NOT NULL REFERENCES departments(id) ON DELETE CASCADE
+target_department_id INTEGER NOT NULL REFERENCES departments(id) ON DELETE CASCADE
+PRIMARY KEY (viewer_department_id, target_department_id)
+created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+
 -- users
 id            SERIAL PRIMARY KEY
 email         TEXT UNIQUE NOT NULL
 password_hash TEXT NOT NULL
 full_name     TEXT NOT NULL DEFAULT ''
-role          TEXT NOT NULL DEFAULT 'operator'   -- 'admin' | 'operator' | 'supervisor'
+role          TEXT NOT NULL DEFAULT 'operator'   -- 'super_admin' | 'dept_admin' | 'supervisor' | 'operator'
+department_id INTEGER NOT NULL REFERENCES departments(id) ON DELETE RESTRICT
+active        BOOLEAN NOT NULL DEFAULT true      -- false blocks login immediately (checked on every request, not just login)
+created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL
 created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 
 -- sites (panic button locations — source of truth for config)
-id         TEXT PRIMARY KEY                      -- matches Firebase sites/ key e.g. "jaffer_express"
-label      TEXT NOT NULL
-type       TEXT NOT NULL DEFAULT 'train'         -- 'train' | 'mine' | 'other'
-region     TEXT NOT NULL DEFAULT ''
-active     BOOLEAN NOT NULL DEFAULT true
-created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+id            TEXT PRIMARY KEY                   -- matches Firebase sites/ key e.g. "jaffer_express"
+label         TEXT NOT NULL
+type          TEXT NOT NULL DEFAULT 'train'      -- 'train' | 'mine' | 'other'
+region        TEXT NOT NULL DEFAULT ''
+source        TEXT NOT NULL DEFAULT 'cellular'   -- 'cellular' (ESP32) | 'satellite_fms' (Falcon Mega Track)
+owner_id      INTEGER REFERENCES users(id) ON DELETE SET NULL   -- who created it ("Created By" in UI)
+department_id INTEGER NOT NULL REFERENCES departments(id) ON DELETE RESTRICT
+active        BOOLEAN NOT NULL DEFAULT true
+created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 
 -- hq_receivers (buzzer box locations)
-id         TEXT PRIMARY KEY                      -- matches Firebase hq_receivers/ key
-label      TEXT NOT NULL
-lea        TEXT NOT NULL DEFAULT ''              -- Law Enforcement Agency name
-city       TEXT NOT NULL DEFAULT ''
-active     BOOLEAN NOT NULL DEFAULT true
-created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+id            TEXT PRIMARY KEY                   -- matches Firebase hq_receivers/ key
+label         TEXT NOT NULL
+lea           TEXT NOT NULL DEFAULT ''           -- Law Enforcement Agency name
+city          TEXT NOT NULL DEFAULT ''
+owner_id      INTEGER REFERENCES users(id) ON DELETE SET NULL
+department_id INTEGER NOT NULL REFERENCES departments(id) ON DELETE RESTRICT
+active        BOOLEAN NOT NULL DEFAULT true
+created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 
 -- site_receiver_routes (many-to-many routing)
 site_id     TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE
 receiver_id TEXT NOT NULL REFERENCES hq_receivers(id) ON DELETE CASCADE
 PRIMARY KEY (site_id, receiver_id)
 created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+
+-- site_visibility_grants (per-operator site allow-list, within their department's universe)
+site_id     TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE
+user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE
+granted_by  INTEGER REFERENCES users(id) ON DELETE SET NULL
+PRIMARY KEY (site_id, user_id)
+granted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+
+-- audit_log (append-only; written by server/services/audit.js, never edited)
+id            BIGSERIAL PRIMARY KEY
+actor_id      INTEGER REFERENCES users(id) ON DELETE SET NULL
+department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL
+action        TEXT NOT NULL                      -- e.g. 'site.create', 'user.delete', 'route.enable'
+entity_type   TEXT NOT NULL                      -- 'user' | 'site' | 'receiver' | 'camera' | 'route' | 'department'
+entity_id     TEXT
+details       JSONB
+created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 
 -- cameras (IP cameras attached to sites — 003_cameras_schema.js + 004_imou_schema.js)
 id              SERIAL PRIMARY KEY
@@ -253,17 +308,48 @@ active          BOOLEAN NOT NULL DEFAULT true
 created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 ```
 
+A department's `department_id` is never nullable on `sites`/`hq_receivers`/`users` — every row belongs to exactly one department (see [Multi-Department Access Model](#multi-department-access-model)).
+
+---
+
+## Multi-Department Access Model
+
+Falcon Eye is multi-tenant: every department (NACTA, Pakistan Railways, a mining authority, an LEA, …) owns its own sites, HQ receivers, and users. NACTA is the **head department** (`is_head=true`) and cannot be deleted or deactivated.
+
+### Roles (`users.role`)
+| Role | Scope | Can do |
+|---|---|---|
+| `super_admin` | Everything | Create/edit/deactivate departments and their admins; manage any site/receiver/user/camera; create cross-department routes; see the full audit log. Only NACTA (the head department) has super_admins. |
+| `dept_admin` | Own department (+ read-only view of overseen departments) | Create/deactivate/reset users in own dept (any role except super_admin); add/remove own sites, receivers, cameras; route own sites → own receivers; assign sites to own operators; see own dept's audit log. |
+| `supervisor` | Every site in the department's view scope, automatically | Read-only: Dashboard, Map, Cameras. No Admin Panel. |
+| `operator` | Only the sites explicitly granted (`site_visibility_grants`) | Read-only, narrowed to granted sites. No Admin Panel. |
+
+### Department view scope (`departments.view_scope`)
+- **`own`** — sees only its own sites/receivers.
+- **`all`** — sees every department's sites/receivers (NACTA).
+- **`selected`** — sees its own plus the departments listed in `department_oversight` (e.g. a Railway Police department overseeing Pakistan Railways).
+
+A user's "universe" is their department's view-scope resolution. Operators are additionally narrowed to their granted subset of that universe. **Management rights are always limited to the actor's own department**, even when their department's view scope includes others — an overseeing dept admin sees another department's sites read-only, they can't edit or delete them. Only `super_admin` can manage across departments, including creating cross-department routes.
+
+### Enforcement
+- `server/services/access.js` is the single source of truth for this logic (`loadActor`, `getScopeDepartmentIds`, `getVisibleSites`, `getVisibleReceiverIds`, `canManageSite/Receiver/Camera/User`, `canRoute`). Every route that touches sites, receivers, cameras, users, or routing calls into it — never re-implement the scoping logic in a route handler.
+- `server/middleware/auth.js#requireAuth` reloads the actor (role/active/department) from the DB on every request, so deactivating a user or department takes effect immediately (see the Backend Architecture note above).
+- On the frontend, `AuthContext` holds `{ user, department, access }` from `GET /api/auth/me`. `access.allSites`/`access.siteIds` drive `useFirebaseData()` and `useAlertNotification()` filtering — the Firebase `sites/`/`logs/` listeners are still unauthenticated reads (see Firebase write rules above), so **this client-side filtering is UX only, not a security boundary**. The real boundary is the backend API, which always re-derives visibility server-side.
+
 ---
 
 ## Backend (Node + Express) Rules
 
 ### Architecture
 - One file per resource in `server/routes/` — never put business logic in `server/index.js`
-- Services (Firebase listeners, sync tasks) live in `server/services/`
+- Services (Firebase listeners, sync tasks, access control, audit) live in `server/services/`
 - Middleware lives in `server/middleware/` — reuse `requireAuth` on every protected route
 - Keep `server/index.js` thin: env load, middleware stack, route mounting, listen, start services
-- Database access only inside route handlers or dedicated service functions — never in middleware
+- Database access only inside route handlers or dedicated service functions — **except** `requireAuth`, which is a deliberate exception (see below)
 - Always use `getFirebaseDb()` from `server/services/firebase.js` — never call `initializeApp` directly in other files
+- **`requireAuth` looks up the user on every request** (`services/access.js#loadActor`), rather than trusting the JWT payload. The JWT only carries `{ id }`. This means a role change, a deactivated account, or a deactivated department takes effect on the user's very next request — not after their 8h token expires. This is the one approved exception to "no DB access in middleware."
+- All route handlers that touch sites/receivers/cameras/users go through `server/services/access.js` for visibility filtering (`getVisibleSites`, `getVisibleSiteIds`, `getVisibleReceiverIds`) and management permission checks (`canManageSite`, `canManageReceiver`, `canManageCamera`, `canManageUser`, `canRoute`) — never hand-roll a department or ownership check in a route file
+- Any create/delete/role-change/route-change/grant-change should call `audit()` from `server/services/audit.js` (fire-and-forget, never throws)
 
 ### Alert Routing Flow
 1. ESP32 pushes `sites/{site_id}/alert = "true"` to Firebase
@@ -284,23 +370,39 @@ created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 
 ### API Routes
 
+"admin" below means `super_admin` or `dept_admin`. "super" means `super_admin` only. Routes without a role note are open to any authenticated, active user but still filtered to what they're allowed to see — see [Multi-Department Access Model](#multi-department-access-model).
+
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/api/auth/login` | — | Returns JWT |
-| GET | `/api/auth/me` | ✓ | Current user info |
-| GET | `/api/admin/data` | ✓ | Sites + receivers + routes snapshot |
-| PUT | `/api/admin/routes/:siteId/:receiverId` | ✓ | Enable a route |
-| DELETE | `/api/admin/routes/:siteId/:receiverId` | ✓ | Disable a route |
-| POST | `/api/admin/sites` | ✓ | Add a site |
-| DELETE | `/api/admin/sites/:id` | ✓ | Remove a site |
-| POST | `/api/admin/receivers` | ✓ | Add a receiver |
-| DELETE | `/api/admin/receivers/:id` | ✓ | Remove a receiver |
+| POST | `/api/auth/login` | — | Returns JWT (payload is `{id}` only) |
+| GET | `/api/auth/me` | ✓ | Current user + department + visible-site access set |
+| PATCH | `/api/auth/password` | ✓ | Change own password (requires current password) |
+| GET | `/api/departments` | ✓ super | List departments with counts + oversight targets |
+| POST | `/api/departments` | ✓ super | Create a department + its first dept admin |
+| PATCH | `/api/departments/:id` | ✓ super | Update name/view_scope/oversight targets/active |
+| DELETE | `/api/departments/:id` | ✓ super | Delete (only if empty; head dept can't be deleted) |
+| GET | `/api/users` | ✓ admin | List users in scope (super: all or `?departmentId=`; dept admin: own dept) |
+| POST | `/api/users` | ✓ admin | Create a user (dept admin locked to own dept, can't create super_admin) |
+| PATCH | `/api/users/:id` | ✓ admin | Update full_name/role/active (department_id: super only) |
+| PATCH | `/api/users/:id/password` | ✓ admin | Reset a user's password |
+| DELETE | `/api/users/:id` | ✓ admin | Remove a user |
+| GET | `/api/users/:id/sites` | ✓ admin | An operator's granted site IDs |
+| PUT | `/api/users/:id/sites` | ✓ admin | Bulk-replace an operator's site grants (`{siteIds:[]}`) |
+| GET | `/api/admin/data` | ✓ | Sites + receivers + routes snapshot, scoped to the caller |
+| PUT | `/api/admin/routes/:siteId/:receiverId` | ✓ admin | Enable a route (own dept only, unless super) |
+| DELETE | `/api/admin/routes/:siteId/:receiverId` | ✓ admin | Disable a route |
+| POST | `/api/admin/sites` | ✓ admin | Add a site (own dept, unless super) |
+| DELETE | `/api/admin/sites/:id` | ✓ admin | Remove a site |
+| GET | `/api/admin/sites/:id/history` | ✓ | Last 15 days of FMS satellite position history |
+| POST | `/api/admin/receivers` | ✓ admin | Add a receiver |
+| DELETE | `/api/admin/receivers/:id` | ✓ admin | Remove a receiver |
+| GET | `/api/admin/audit` | ✓ admin | Audit trail (super: system-wide; dept admin: own dept) |
 | GET | `/api/cameras?siteId=x` | ✓ | Cameras for a site (no passwords) |
-| GET | `/api/cameras/all` | ✓ | All cameras with site info |
-| POST | `/api/cameras` | ✓ admin | Add a camera |
+| GET | `/api/cameras/all` | ✓ | All cameras in scope, with site + department info |
+| POST | `/api/cameras` | ✓ admin | Add a camera (must manage the parent site) |
 | PUT | `/api/cameras/:id` | ✓ admin | Update a camera |
 | DELETE | `/api/cameras/:id` | ✓ admin | Delete a camera |
-| POST | `/api/streams/:id/start` | ✓ | Start FFmpeg → HLS stream |
+| POST | `/api/streams/:id/start` | ✓ | Start FFmpeg/IMOU → HLS stream (403 if the camera's site isn't visible to you) |
 | GET | `/api/streams/:id/status` | ✓ | Stream status + heartbeat |
 | DELETE | `/api/streams/:id` | ✓ | Stop stream |
 | GET | `/streams/:id/stream.m3u8` | — | HLS playlist (static file) |
@@ -331,12 +433,15 @@ created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 ### Architecture
 - **Pages** (`src/pages/`) — route-level components, own their data-fetching and layout
 - **Layout components** (`src/components/layout/`) — structural shell (Topbar, Sidebar, DashboardLayout, ProtectedRoute)
+- **`src/components/admin/`** — Admin panel tab components (`DepartmentsPanel`, `UsersPanel`, `SitesPanel`, `ReceiversPanel`, `RoutingMatrix`, `CamerasPanel`, `AuditPanel`, `SiteAccessDialog`), plus `shared.tsx` (FormField, EntityTable, CountBadge, DepartmentBadge) and `types.ts`. `pages/Admin.tsx` is just the shell — tab state, data loading, the super-admin department filter. Follow this split for any new Admin tab rather than growing `Admin.tsx`.
 - **UI primitives** (`src/components/ui/`) — Shadcn-style, stateless, styled with `cva` + Tailwind
-- **Contexts** (`src/contexts/`) — global state only (auth). Not a replacement for local state
+- **Contexts** (`src/contexts/`) — global state only (auth: user + department + visible-site access). Not a replacement for local state
+- **`src/types/access.ts`** — shared `Role`/`Department`/`Access` types + `ROLE_LABELS`; import `Role` from here, not from `AuthContext`
 - **`src/lib/utils.ts`** — pure utility functions only (`cn`, formatters, helpers)
 - **`src/lib/api.ts`** — central fetch client; use this for all backend calls, never raw `fetch`
 - **`src/lib/firebase.ts`** — Firebase app init; imports `db` from here for all RTDB access
-- **`src/hooks/useFirebaseData.ts`** — composite hook for all live Firebase data (sites, alerts, logs)
+- **`src/hooks/useFirebaseData.ts`** — composite hook for all live Firebase data (sites, alerts, logs), pre-filtered to `useAuth().access`
+- **`src/hooks/useAlertNotification.ts`** — live panic-alert popup queue, also filtered to `useAuth().access`
 
 ### Routes
 
@@ -344,7 +449,7 @@ created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 |---|---|---|
 | `/` | Dashboard | Live stats, active alerts, recent alert feed, site status |
 | `/map` | LiveMap | Leaflet map with real-time GPS markers per site |
-| `/admin` | Admin | Routing matrix + site/receiver management |
+| `/admin` | Admin | Departments (super only), users, sites, receivers, routing, cameras, audit log — `super_admin`/`dept_admin` only |
 | `/login` | Login | JWT auth form |
 
 ### Component Rules
@@ -424,15 +529,18 @@ Shadcn UI pattern — components are owned code in `src/components/ui/`, not a b
 
 ## Key Decisions & Constraints
 
-- **No registration flow** — user accounts are created by admin only (future user management tab in Admin panel)
+- **No registration flow** — user accounts are created by a super admin (any department) or a dept admin (own department only)
 - **No light mode** — operational environment requires dark UI
-- **Web frontend is Firebase read-only** — the ESP32 firmware and the Node.js backend write to Firebase; the React app only reads via `onValue`/`get`
-- **PostgreSQL is the source of truth** for users, site config, receiver config, and routing rules — Firebase `routing/` is a derived cache synced from PostgreSQL by `routingSync.js`
+- **Web frontend is Firebase read-only** — the ESP32 firmware and the Node.js backend write to Firebase; the React app only reads via `onValue`/`get`. **This is currently unauthenticated** — the `sites/`/`logs/` RTDB nodes have no security rules, so department isolation on the frontend is UX-only; the real boundary is the backend API. Locking Firebase down (per-user custom tokens + RTDB rules) is a planned follow-up — see Planned Features.
+- **PostgreSQL is the source of truth** for departments, users, site config, receiver config, and routing rules — Firebase `routing/` is a derived cache synced from PostgreSQL by `routingSync.js`
+- **Department is the tenancy boundary** — every site, receiver, and user belongs to exactly one department (`department_id`, `NOT NULL`, `ON DELETE RESTRICT`). See [Multi-Department Access Model](#multi-department-access-model).
+- **`requireAuth` reloads the actor from PostgreSQL on every request** (not just at login) — the one approved exception to "no DB access in middleware," so role/active/department changes are enforced immediately, not after the JWT's 8h expiry
 - **Firebase Admin SDK uses modular API** (`firebase-admin/app`, `firebase-admin/database`) — do not use the legacy namespace API (`admin.database()`, `admin.credential.cert()`)
 - **Firebase client SDK uses modular API** (`firebase/app`, `firebase/database`) — do not use compat imports
-- **JWT over sessions** — stateless auth suits the multi-device operator scenario
+- **JWT over sessions** — stateless auth suits the multi-device operator scenario; the JWT payload is `{id}` only, everything else (role, department, active) is loaded fresh server-side
 - **CommonJS for server** — do not convert server files to ESM without updating root `package.json`
 - **Routing sync is bidirectional in one direction** — DB is master, Firebase is replica; always update DB first then call `syncRoutingToFirebase()`
+- **Cross-department routing is super_admin only** — a dept admin can only route their own department's sites to their own department's receivers (`canRoute()` in `services/access.js`)
 
 ---
 
@@ -466,11 +574,11 @@ Default endpoint is `openapi.easy4ip.com` (works globally for most accounts). Ch
 
 ## Planned Features (not yet built)
 
+- **Firebase lock-down (Phase B of the multi-department access model)** — mint per-user Firebase custom tokens from the backend (`POST /api/auth/firebase-token`), add RTDB security rules scoped to an `access/{uid}/{siteId}` node synced from PostgreSQL, and move the client off unauthenticated `sites/`/`logs/` reads. The ESP32 firmware uses a legacy database secret (bypasses security rules), so this is safe to do without touching device firmware. **The current database secret was shared in plaintext during planning and should be rotated** (Firebase console → Project settings → Service accounts → Database secrets) before or as part of this work.
 - Alert history page with filters (site, severity, date range)
 - Train Network management page
 - Mining Sites management page
 - QRF Dispatch page
 - Device management page (ESP32 node inventory, battery, signal)
-- User management tab in Admin panel (create/deactivate operators)
 - Notification sound + browser push for incoming panic alerts
 - Production deployment config (env vars, CORS, HTTPS)

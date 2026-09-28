@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom"
 import { AuthProvider } from "@/contexts/AuthContext"
-import type { Role } from "@/contexts/AuthContext"
+import type { Role } from "@/types/access"
 import ProtectedRoute from "@/components/layout/ProtectedRoute"
 import DashboardLayout from "@/components/layout/DashboardLayout"
 import Dashboard from "@/pages/Dashboard"
@@ -26,7 +26,7 @@ function App() {
           <Route path="/"         element={<ProtectedPage><Dashboard /></ProtectedPage>} />
           <Route path="/map"      element={<ProtectedPage><LiveMap /></ProtectedPage>} />
           <Route path="/cameras"  element={<ProtectedPage><Cameras /></ProtectedPage>} />
-          <Route path="/admin"    element={<ProtectedPage><Admin /></ProtectedPage>} />
+          <Route path="/admin"    element={<ProtectedPage allowedRoles={['super_admin', 'dept_admin']}><Admin /></ProtectedPage>} />
           <Route path="*"      element={<Navigate to="/" replace />} />
         </Routes>
       </AuthProvider>

@@ -1,9 +1,10 @@
-import { useEffect } from "react"
+import { useEffect, useState, useMemo } from "react"
 import { MapContainer, TileLayer, LayersControl, Marker, Popup, useMap } from "react-leaflet"
 import { useNavigate } from "react-router-dom"
 import L from "leaflet"
 import "leaflet/dist/leaflet.css"
 import { Badge } from "@/components/ui/badge"
+import { cn } from "@/lib/utils"
 import { MapPin, Satellite, Clock, Gauge, Loader2, Camera } from "lucide-react"
 import { useFirebaseData, type SiteData } from "@/hooks/useFirebaseData"
 
@@ -76,8 +77,14 @@ function MapAutoFit({ sites }: { sites: SiteData[] }) {
 
 // ── Main component ───────────────────────────────────────────────
 export default function LiveMap() {
-  const { sites, activeAlertCount } = useFirebaseData()
+  const { sites: allSites, activeAlertCount, departmentCodes } = useFirebaseData()
   const navigate = useNavigate()
+  const [deptFilter, setDeptFilter] = useState<string | null>(null)
+
+  const sites = useMemo(
+    () => deptFilter ? allSites.filter(s => s.department_code === deptFilter) : allSites,
+    [allSites, deptFilter]
+  )
 
   return (
     <div className="flex flex-col gap-4" style={{ height: "calc(100vh - 6.5rem)" }}>
@@ -102,6 +109,33 @@ export default function LiveMap() {
           </div>
         </div>
       </div>
+
+      {/* Department filter — only shown when visible sites span more than one department */}
+      {departmentCodes.length > 1 && (
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            onClick={() => setDeptFilter(null)}
+            className={cn(
+              "rounded-full border px-2.5 py-1 text-[11px] transition-colors",
+              !deptFilter ? "border-primary bg-primary/15 text-primary" : "border-border text-muted-foreground hover:text-foreground"
+            )}
+          >
+            All Departments
+          </button>
+          {departmentCodes.map(code => (
+            <button
+              key={code}
+              onClick={() => setDeptFilter(code)}
+              className={cn(
+                "rounded-full border px-2.5 py-1 text-[11px] font-mono transition-colors",
+                deptFilter === code ? "border-primary bg-primary/15 text-primary" : "border-border text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {code}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Map + sidebar */}
       <div className="grid grid-cols-1 xl:grid-cols-4 gap-4 flex-1 min-h-0">

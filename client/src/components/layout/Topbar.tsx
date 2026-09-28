@@ -11,6 +11,7 @@ import { useNavigate } from "react-router-dom"
 import { ref, onValue } from "firebase/database"
 import { db } from "@/lib/firebase"
 import { api } from "@/lib/api"
+import { ROLE_LABELS } from "@/types/access"
 
 function SystemStatusPill({ online }: { online: boolean }) {
   return (
@@ -44,7 +45,7 @@ export default function Topbar() {
   const [time, setTime] = useState(new Date())
   const [firebaseOnline, setFirebaseOnline] = useState(false)
   const [changePwOpen, setChangePwOpen] = useState(false)
-  const { user, logout } = useAuth()
+  const { user, department, logout } = useAuth()
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -114,7 +115,10 @@ export default function Topbar() {
             <span className="text-xs font-semibold text-foreground">
               {user?.full_name ?? "Operator"}
             </span>
-            <span className="text-[10px] text-muted-foreground capitalize">{user?.role ?? ""}</span>
+            <span className="text-[10px] text-muted-foreground">
+              {user ? ROLE_LABELS[user.role] : ""}
+              {department ? ` · ${department.code}` : ""}
+            </span>
           </div>
         </div>
 

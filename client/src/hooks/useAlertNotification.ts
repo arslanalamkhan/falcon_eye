@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react"
 import { ref, onValue } from "firebase/database"
 import { db } from "@/lib/firebase"
+import { useAuth } from "@/contexts/AuthContext"
 
 export type AlertEvent = {
   siteId:     string
@@ -16,14 +17,25 @@ export function useAlertNotification() {
   const [queue, setQueue]       = useState<AlertEvent[]>([])
   // Tracks sites whose current alert cycle we've already notified about
   const notified = useRef<Set<string>>(new Set())
+  const { access } = useAuth()
 
   useEffect(() => {
+    // Access hasn't loaded yet — wait rather than notifying on sites we
+    // might not actually be allowed to see.
+    if (!access) return
+
+    const isVisible = access.allSites
+      ? () => true
+      : (() => { const set = new Set(access.siteIds ?? []); return (id: string) => set.has(id) })()
+
     const sitesRef = ref(db, 'sites')
     return onValue(sitesRef, (snap) => {
       if (!snap.exists()) return
 
       snap.forEach((child) => {
-        const id   = child.key as string
+        const id = child.key as string
+        if (!isVisible(id)) return
+
         const site = child.val()
         const isAlert = site.alert === 'true'
 
@@ -48,7 +60,7 @@ export function useAlertNotification() {
         }
       })
     })
-  }, [])
+  }, [access])
 
   const dismiss = () => setQueue(prev => prev.slice(1))
 

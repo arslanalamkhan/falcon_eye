@@ -1,4 +1,6 @@
+import { useState, useMemo } from "react"
 import { Badge } from "@/components/ui/badge"
+import { cn } from "@/lib/utils"
 import {
   AlertTriangle,
   Radio,
@@ -37,7 +39,12 @@ const signalColor: Record<string, string> = {
 }
 
 export default function Dashboard() {
-  const { sites, recentAlerts, activeAlertCount } = useFirebaseData()
+  const { sites: allSites, recentAlerts, activeAlertCount, departmentCodes } = useFirebaseData()
+  const [deptFilter, setDeptFilter] = useState<string | null>(null)
+  const sites = useMemo(
+    () => deptFilter ? allSites.filter(s => s.department_code === deptFilter) : allSites,
+    [allSites, deptFilter]
+  )
 
   const alertSubtext =
     activeAlertCount > 0 ? `${activeAlertCount} critical` : "No active alerts"
@@ -162,12 +169,38 @@ export default function Dashboard() {
 
         {/* Site Status — live from Firebase */}
         <div className="rounded-lg border border-border bg-card">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-border gap-2 flex-wrap">
             <div className="flex items-center gap-2">
               <Radio className="h-4 w-4 text-violet-400" />
               <h2 className="text-sm font-semibold text-foreground">Site Status</h2>
             </div>
-            <Badge variant="secondary" className="text-[10px]">Live</Badge>
+            {departmentCodes.length > 1 ? (
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setDeptFilter(null)}
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-[10px] transition-colors",
+                    !deptFilter ? "border-primary bg-primary/15 text-primary" : "border-border text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  All
+                </button>
+                {departmentCodes.map(code => (
+                  <button
+                    key={code}
+                    onClick={() => setDeptFilter(code)}
+                    className={cn(
+                      "rounded-full border px-2 py-0.5 text-[10px] font-mono transition-colors",
+                      deptFilter === code ? "border-primary bg-primary/15 text-primary" : "border-border text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    {code}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <Badge variant="secondary" className="text-[10px]">Live</Badge>
+            )}
           </div>
 
           {sites.length === 0 ? (

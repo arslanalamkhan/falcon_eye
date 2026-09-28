@@ -3,7 +3,7 @@ import { NavLink } from "react-router-dom"
 import { cn } from "@/lib/utils"
 import { Separator } from "@/components/ui/separator"
 import { useAuth } from "@/contexts/AuthContext"
-import type { Role } from "@/contexts/AuthContext"
+import type { Role } from "@/types/access"
 import {
   LayoutDashboard,
   MapPin,
@@ -33,7 +33,7 @@ const navItems: { group: string; items: NavItem[] }[] = [
   {
     group: "System",
     items: [
-      { icon: SlidersHorizontal, label: "Admin Panel", to: "/admin" },
+      { icon: SlidersHorizontal, label: "Admin Panel", to: "/admin", allowedRoles: ['super_admin', 'dept_admin'] },
     ],
   },
 ]
