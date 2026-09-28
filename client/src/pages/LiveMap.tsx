@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { MapContainer, TileLayer, LayersControl, ZoomControl } from "react-leaflet"
-import { ChevronUp, PanelLeftClose, PanelLeftOpen, MapPinned } from "lucide-react"
+import { ChevronUp, PanelLeftClose, PanelLeftOpen, MapPinned, Route, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Tip } from "@/components/ui/tooltip"
@@ -12,6 +12,8 @@ import { useMediaQuery } from "@/hooks/useMediaQuery"
 import { SiteMarkers } from "@/components/map/SiteMarkers"
 import { MapController, type FocusRequest } from "@/components/map/MapController"
 import { SitePanel } from "@/components/map/SitePanel"
+import { TrackLayer, type TrackSummary } from "@/components/map/TrackLayer"
+import { formatDateTime, pluralize } from "@/lib/format"
 import { hasCoords, sitesSummary } from "@/lib/sites"
 
 const PAKISTAN_CENTER: [number, number] = [30.3753, 69.3451]
@@ -31,6 +33,8 @@ export default function LiveMap() {
   // Fly-to requests. Seeded from ?site= so alert/bell/search links land on the site.
   const [focus, setFocus]             = useState<FocusRequest | null>(() => (selectedId ? { id: selectedId, nonce: 1 } : null))
   const fromMarkerClick               = useRef<string | null>(null)
+  const [trackSiteId, setTrackSiteId] = useState<string | null>(null)
+  const [trackSummary, setTrackSummary] = useState<TrackSummary | null | undefined>(undefined)
 
   // Follow ?site= changes made from outside the map (bell, command palette)
   useEffect(() => {
@@ -106,8 +110,38 @@ export default function LiveMap() {
         </LayersControl>
         <ZoomControl position="topright" />
         <MapController sites={located} focus={focus} fitNonce={fitNonce} padding={padding} />
-        <SiteMarkers sites={located} selectedId={selectedId} onSelect={selectFromMarker} />
+        {trackSiteId && (
+          <TrackLayer key={trackSiteId} siteId={trackSiteId} padding={padding} onLoaded={setTrackSummary} />
+        )}
+        <SiteMarkers
+          sites={located}
+          selectedId={selectedId}
+          onSelect={selectFromMarker}
+          onShowTrack={(id) => { setTrackSummary(undefined); setTrackSiteId(id) }}
+        />
       </MapContainer>
+
+      {/* ── Satellite track summary ───────────────────────────── */}
+      {trackSiteId && (
+        <div className="absolute left-1/2 top-3 z-10 flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 items-center gap-3 rounded-xl border border-info/30 bg-popover/95 py-2 pl-3.5 pr-2 shadow-pop backdrop-blur-xl md:top-4">
+          <Route className="h-4 w-4 shrink-0 text-info" />
+          <div className="min-w-0 text-xs leading-tight">
+            <p className="truncate font-semibold text-foreground">
+              {sites.find((s) => s.id === trackSiteId)?.label ?? trackSiteId} — 15-day track
+            </p>
+            <p className="truncate text-muted-foreground">
+              {trackSummary === undefined
+                ? "Loading…"
+                : trackSummary === null
+                  ? "No reports in the last 15 days"
+                  : `${pluralize(trackSummary.reports, "report")} · ${pluralize(trackSummary.alarms, "alarm message")} · ${formatDateTime(trackSummary.from)} → ${formatDateTime(trackSummary.to)}`}
+            </p>
+          </div>
+          <Button variant="ghost" size="icon-sm" onClick={() => setTrackSiteId(null)} aria-label="Hide track">
+            <X />
+          </Button>
+        </div>
+      )}
 
       {/* ── Desktop floating panel ─────────────────────────────── */}
       {panelOpen ? (

@@ -8,7 +8,8 @@
     "dev:server": "nodemon server/index.js",
     "build": "cd client && npx tsc -b && npx vite build",
     "db:setup": "node server/scripts/setup-db.js",
-    "install:all": "npm install && cd client && npm install"
+    "install:all": "npm install && cd client && npm install",
+    "test": "node --test \"server/**/*.test.js\""
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

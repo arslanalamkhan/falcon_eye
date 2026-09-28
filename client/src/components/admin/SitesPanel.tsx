@@ -12,7 +12,8 @@ import { SearchInput } from "@/components/ui/input"
 import { EmptyState } from "@/components/ui/empty-state"
 import { DataTable, RowActions, type Column } from "@/components/ui/data-table"
 import { DepartmentBadge, PanelToolbar, ReadOnlyHint } from "./shared"
-import { AddSiteDialog } from "./AddSiteDialog"
+import { AddSiteDialog, type SitePrefill } from "./AddSiteDialog"
+import { UnregisteredTerminals } from "./UnregisteredTerminals"
 import type { Site, DepartmentRow } from "./types"
 
 const TYPE_ICON: Record<string, React.ElementType> = { train: TrainFront, mine: Pickaxe, other: Radio }
@@ -26,6 +27,17 @@ export function SitesPanel({ sites, onRefresh, isSuper, currentDeptId, departmen
   const confirm = useConfirm()
   const [query, setQuery]     = useState("")
   const [addOpen, setAddOpen] = useState(false)
+  // Pre-filled "Register" from an unregistered FMS terminal; `dialogKey`
+  // remounts the dialog so it picks the new values up.
+  const [prefill, setPrefill] = useState<SitePrefill | undefined>(undefined)
+  const [dialogKey, setDialogKey] = useState(0)
+  const [terminalsKey, setTerminalsKey] = useState(0)
+
+  const openAdd = (values?: SitePrefill) => {
+    setPrefill(values)
+    setDialogKey((k) => k + 1)
+    setAddOpen(true)
+  }
 
   const canManage = (s: Site) => isSuper || s.department_id === currentDeptId
 
@@ -92,7 +104,9 @@ export function SitesPanel({ sites, onRefresh, isSuper, currentDeptId, departmen
 
   return (
     <>
-      <PanelToolbar actions={<Button onClick={() => setAddOpen(true)}><Plus /> Add site</Button>}>
+      {isSuper && <UnregisteredTerminals onRegister={openAdd} refreshKey={terminalsKey} />}
+
+      <PanelToolbar actions={<Button onClick={() => openAdd()}><Plus /> Add site</Button>}>
         <div className="w-full sm:max-w-xs">
           <SearchInput value={query} onChange={setQuery} placeholder="Search sites…" />
         </div>
@@ -118,7 +132,7 @@ export function SitesPanel({ sites, onRefresh, isSuper, currentDeptId, departmen
               icon={MapPinOff}
               title="No sites yet"
               description="Register a panic-button or satellite tracker so it can be monitored and routed."
-              action={<Button onClick={() => setAddOpen(true)}><Plus /> Add your first site</Button>}
+              action={<Button onClick={() => openAdd()}><Plus /> Add your first site</Button>}
             />
           ) : (
             <EmptyState icon={SearchX} title="No matching sites" description="Try a different name, ID or region." />
@@ -127,12 +141,14 @@ export function SitesPanel({ sites, onRefresh, isSuper, currentDeptId, departmen
       </Card>
 
       <AddSiteDialog
+        key={dialogKey}
         open={addOpen}
         onOpenChange={setAddOpen}
         isSuper={isSuper}
         currentDeptId={currentDeptId}
         departments={departments}
-        onCreated={onRefresh}
+        prefill={prefill}
+        onCreated={() => { onRefresh(); setTerminalsKey((k) => k + 1) }}
       />
     </>
   )

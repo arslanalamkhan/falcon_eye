@@ -291,6 +291,25 @@
   box-shadow: 0 0 0 5px hsl(var(--primary) / 0.45), 0 2px 12px rgb(0 0 0 / 0.6);
 }
 
+/* ── Satellite track (components/map/TrackLayer.tsx) ────────── */
+.fe-track-line {
+  stroke: hsl(var(--info));
+  stroke-width: 3px;
+  stroke-opacity: 0.85;
+  stroke-dasharray: 6 6;
+  fill: none;
+}
+
+.fe-track-point {
+  stroke: hsl(0 0% 100%);
+  stroke-width: 1.5px;
+  fill-opacity: 1;
+}
+.fe-track-point--position { fill: hsl(var(--info)); }
+.fe-track-point--alert    { fill: hsl(var(--danger)); }
+.fe-track-point--reset    { fill: hsl(var(--success)); }
+.fe-track-point--test     { fill: hsl(var(--warning)); }
+
 @keyframes fe-ping {
   75%, 100% {
     transform: scale(2.6);

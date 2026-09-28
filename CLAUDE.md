@@ -127,10 +127,18 @@ node server/scripts/004_imou_schema.js    # Add IMOU columns to cameras (run onc
 node server/scripts/005_ownership_hierarchy.js  # Add owner_id + site_visibility_grants (run once)
 node server/scripts/006_fms_integration_schema.js # Add FMS satellite tracking tables (run once)
 node server/scripts/007_departments.js    # Add department model (departments, roles, audit_log) — run once
+node server/scripts/008_fms_unmatched_messages.js # Park reports from unregistered FMS terminals — run once
 
 # ── Start servers (two separate terminals) ─────────────────────────
 node server/index.js                     # API + alertRouter on port 3001
 cd client && npx vite                    # Frontend on port 5173
+
+# ── Tests ──────────────────────────────────────────────────────────
+npm test                                 # node:test — server/**/*.test.js (FMS state machine)
+
+# ── FMS maintenance ────────────────────────────────────────────────
+node server/scripts/fms_reconcile.js          # preview alert-data repairs (dry run)
+node server/scripts/fms_reconcile.js --apply  # apply them (the server also does this on start)
 
 # ── Production build ───────────────────────────────────────────────
 cd client && npx tsc -b && npx vite build
@@ -154,6 +162,13 @@ CORS_ORIGIN=http://localhost:5173   # change to production frontend URL on deplo
 IMOU_APP_ID=<from IMOU Open Platform console>
 IMOU_APP_SECRET=<from IMOU Open Platform console>
 IMOU_API_BASE_URL=https://openapi.easy4ip.com/openapi   # default; or openapi.lechange.cn for China accounts
+
+# Falcon Mega Track (FMS) satellite tracking — see "FMS Satellite Integration"
+FMS_API_KEY=<from Falcon Mega Track>     # sync is disabled when unset
+FMS_POLL_INTERVAL_MS=60000               # default 60s; clamped to ≥ 30000 (API limit: 10 req / 5 min)
+FMS_STALE_AFTER_MIN=60                   # no report for this long → GPS shown as last-known
+FMS_REQUEST_TIMEOUT_MS=20000             # per request
+# FMS_API_BASE_URL=...                   # override only if FMS changes its endpoint
 ```
 
 ### `client/.env` (Vite — must use `VITE_` prefix)
@@ -205,7 +220,10 @@ Neither `.env` file is committed. The Firebase Admin service account key (`serve
 /logs/{YYYY-MM-DD}/{push_key}/
     site_id     STRING
     site_label  STRING
-    event       STRING   "alert" | "reset" | "reset_acknowledged"
+    event       STRING   "alert"              ← incident onset (ESP32 press / first FMS SSAS alarm)
+                         "alert_repeat"       ← FMS: SSAS re-sent every ~15 min while active — NOT a new incident
+                         "reset" | "reset_acknowledged" | "test_alert"
+                         (the web app only counts/lists "alert" — never add repeats to alert counts)
     timestamp   STRING   ISO datetime
     lat         STRING
     lng         STRING
@@ -320,6 +338,22 @@ imou_device_id  TEXT                            -- IMOU device serial number
 imou_channel_id TEXT NOT NULL DEFAULT '0'       -- IMOU channel within the device
 active          BOOLEAN NOT NULL DEFAULT true
 created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+
+-- sites.source (006) — 'cellular' (ESP32) | 'satellite_fms' (Falcon Mega Track)
+
+-- fms_assets (006) — which FMS terminal feeds which site
+site_id    TEXT PRIMARY KEY REFERENCES sites(id) ON DELETE CASCADE
+mobile_id  TEXT NOT NULL UNIQUE                 -- terminal hardware serial — the match key
+imo, mmsi  TEXT UNIQUE                          -- optional; ground terminals send junk ("0", "undefined")
+asset_name TEXT NOT NULL DEFAULT ''
+
+-- fms_sync_cursor (006) — single row: next_reference_id to request (inclusive)
+-- fms_position_history (006) — every applied report, 15-day rolling window, UNIQUE(reference_id)
+site_id, reference_id, lat, lng, speed_kmh, report_type, received_at
+
+-- fms_unmatched_messages (008) — reports from terminals with no fms_assets row yet, 15-day window;
+--   adopted into fms_position_history once a site is registered with that mobile_id
+reference_id PK, mobile_id, asset_name, report_type, lat, lng, speed_kmh, received_at
 ```
 
 A department's `department_id` is never nullable on `sites`/`hq_receivers`/`users` — every row belongs to exactly one department (see [Multi-Department Access Model](#multi-department-access-model)).
@@ -411,6 +445,7 @@ A user's "universe" is their department's view-scope resolution. Operators are a
 | POST | `/api/admin/receivers` | ✓ admin | Add a receiver |
 | DELETE | `/api/admin/receivers/:id` | ✓ admin | Remove a receiver |
 | GET | `/api/admin/audit` | ✓ admin | Audit trail (super: system-wide; dept admin: own dept) |
+| GET | `/api/admin/fms/unregistered` | ✓ super | FMS terminals reporting with no registered site (`alarm_recent` flags an active alarm) |
 | GET | `/api/cameras?siteId=x` | ✓ | Cameras for a site (no passwords) |
 | GET | `/api/cameras/all` | ✓ | All cameras in scope, with site + department info |
 | POST | `/api/cameras` | ✓ admin | Add a camera (must manage the parent site) |
@@ -590,6 +625,41 @@ Shadcn UI pattern — components are owned code in `src/components/ui/`, not a b
 
 ---
 
+## FMS Satellite Integration (Falcon Mega Track)
+
+Some sites are tracked by an Inmarsat IDP satellite terminal instead of an ESP32. `server/services/fmsSync.js` polls the FMS cloud API and writes those sites into Firebase `sites/{id}` exactly like an ESP32 would, so the alert router, map and dashboard need no special cases. FMS field names are maritime (IMO, MMSI, `Ship_Security_Alert` = SSAS panic) because the platform was built for ships.
+
+### The API (`server/services/fmsClient.js`)
+- `GET …/GetTrackingDataByReferenceID/{FMS_API_KEY}/{cursor}` → `{ ErrorCode, AssetPosition[], NextReferenceID }`
+- **Cursor-based and inclusive**: returns every message with `ReferenceID >= cursor`. FMS retains history, so rewinding the cursor replays messages (cursor `-1` returns everything retained).
+- **Rate limit: 10 requests per 5 minutes per key** (HTTP 403 "API call limit exceeded"). Every process using the key shares that budget — **run exactly one server per key**, and don't run ad-hoc API probes in a tight loop. The poll interval is clamped to ≥ 30s; the 60s default uses half the budget.
+- Message fields: `AssetName, IMO, MMSI, MobileID, PositionReportType, Network, ReferenceID, Latitude, Longitude, Speed, SpeedUnit (knots), Heading, CourseOverGround, ReceivedOn_UnixUTC, ReceivedOn_UTC`
+- Terminals have no fixed heartbeat — a stationary terminal can be silent for days; an active SSAS alarm is re-sent every ~15 min until the terminal is reset.
+
+### Each tick (non-overlapping, every `FMS_POLL_INTERVAL_MS`)
+1. **Adopt** parked reports whose MobileID now has a registered site → history + latest position only (never replays an old alarm; an active one is re-raised by its next 15-min repeat)
+2. **Fetch** from the cursor; skip ReferenceIDs already in history or parked (idempotent replays)
+3. **Match** by `MobileID` (IMO/MMSI fallback). Unmatched → `fms_unmatched_messages`, shown to super admins in Admin → Sites with a pre-filled "Register" button
+4. **Reduce** each site's messages with the pure state machine in `fmsState.js` (unit-tested in `fmsState.test.js`):
+   - first `Ship_Security_Alert` = **onset** → `alert="true"`, `last_alert` = onset time, log `"alert"`
+   - later ones while active = **repeat** → position only, log `"alert_repeat"` (`last_alert` never moves)
+   - `SSAS_Reset_Acknowledgement` → `alert="false"`; `SSAS_Test` → log only
+   - fresh onset + reset in the same batch → the reset is **deferred** one tick (cursor held back), otherwise Firebase would never show `alert="true"` and `alertRouter` would never buzz a receiver
+5. **Write** Firebase first, then history + unmatched + cursor in one DB transaction
+6. **Staleness**: GPS `status` is `live` only if the last report is newer than `FMS_STALE_AFTER_MIN`; otherwise `fallback` (UI: "last known")
+7. **Prune** history and parked reports older than 15 days
+
+On start, `fmsReconcile.js` replays stored history through the same state machine and repairs Firebase data written by the pre-fix sync (onset time, repeats logged as alerts). It's idempotent.
+
+### Alarms are cleared only by the terminal (for now)
+An HQ receiver's acknowledgement (`sites/{id}/reset`) does **not** clear an FMS alarm — only `SSAS_Reset_Acknowledgement` from the terminal does, so routed receivers keep buzzing until then. A remote reset through an FMS API is planned (see Planned Features).
+
+### UI
+- Admin → Sites: unregistered terminals callout (super admin), Satellite tracking badge
+- Live Map: satellite sites' popups offer a **15-day track** (`/api/admin/sites/:id/history`, drawn by `components/map/TrackLayer.tsx`)
+
+---
+
 ## IMOU Cloud Camera Integration
 
 IMOU cameras can stream via IMOU's cloud instead of direct RTSP, removing the need for FFmpeg on the server.
@@ -621,6 +691,7 @@ Default endpoint is `openapi.easy4ip.com` (works globally for most accounts). Ch
 ## Planned Features (not yet built)
 
 - **Firebase lock-down (Phase B of the multi-department access model)** — mint per-user Firebase custom tokens from the backend (`POST /api/auth/firebase-token`), add RTDB security rules scoped to an `access/{uid}/{siteId}` node synced from PostgreSQL, and move the client off unauthenticated `sites/`/`logs/` reads. The ESP32 firmware uses a legacy database secret (bypasses security rules), so this is safe to do without touching device firmware. **The current database secret was shared in plaintext during planning and should be rotated** (Firebase console → Project settings → Service accounts → Database secrets) before or as part of this work.
+- **Remote FMS alarm reset** — clear a satellite terminal's SSAS alarm through the FMS API (endpoint details pending from Falcon Mega Track), triggered from HQ acknowledgement and/or the web UI
 - Alert history page with filters (site, severity, date range)
 - Train Network management page
 - Mining Sites management page

@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from "react"
 import { ref, onValue, get, query, orderByKey, limitToLast } from "firebase/database"
 import { db } from "@/lib/firebase"
 import { useAuth } from "@/contexts/AuthContext"
-import type { SiteType } from "@/types/access"
+import type { SiteType, SiteSource } from "@/types/access"
 
 export type SiteGps = {
   lat: string
@@ -16,6 +16,8 @@ export type SiteData = {
   id: string
   label: string
   type?: SiteType
+  /** 'satellite_fms' sites have a 15-day position history (map track) */
+  source?: SiteSource
   department_code?: string
   /**
    * false when the site is registered (PostgreSQL) but its device has
@@ -137,6 +139,7 @@ export function useFirebaseData() {
         id: s.id,
         label: s.label || fb?.label || s.id,
         type: s.type,
+        source: s.source,
         department_code: s.department_code,
         reported: !!fb,
         alert: fb?.alert ?? false,

@@ -12,20 +12,25 @@ import type { DepartmentRow } from "./types"
 
 type Source = "cellular" | "satellite_fms"
 
-export function AddSiteDialog({ open, onOpenChange, isSuper, currentDeptId, departments, onCreated }: {
+export type SitePrefill = { label?: string; id?: string; source?: Source; mobile_id?: string }
+
+/** Remount with a new `key` when `prefill` changes — initial state is read once. */
+export function AddSiteDialog({ open, onOpenChange, isSuper, currentDeptId, departments, onCreated, prefill }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   isSuper: boolean
   currentDeptId: number
   departments: DepartmentRow[]
   onCreated: () => void
+  /** e.g. an unregistered FMS terminal: name + MobileID filled in */
+  prefill?: SitePrefill
 }) {
   const empty = {
     label: "", id: "", type: "train", region: "", source: "cellular" as Source,
     mobile_id: "", imo: "", mmsi: "", department_id: String(currentDeptId),
   }
-  const [form, setForm]         = useState(empty)
-  const [idTouched, setIdTouched] = useState(false)
+  const [form, setForm]         = useState(() => ({ ...empty, ...prefill }))
+  const [idTouched, setIdTouched] = useState(Boolean(prefill?.id))
   const [saving, setSaving]     = useState(false)
   const [error, setError]       = useState("")
 

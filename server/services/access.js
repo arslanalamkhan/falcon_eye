@@ -58,7 +58,7 @@ async function getScopeDepartmentIds(actor) {
 }
 
 // ── Visible sites ────────────────────────────────────────────────────
-// Returns { allSites: boolean, siteIds: string[] | null, sites: [{id, label, type, department_id, department_code}] }
+// Returns { allSites: boolean, siteIds: string[] | null, sites: [{id, label, type, source, department_id, department_code}] }
 // allSites/siteIds=null means "no filter". Operators are narrowed to their
 // granted subset of the department universe.
 async function getVisibleSites(actor) {
@@ -66,11 +66,11 @@ async function getVisibleSites(actor) {
 
   const baseQuery = scopeDeptIds === null
     ? pool.query(
-        `SELECT s.id, s.label, s.type, s.department_id, d.code AS department_code
+        `SELECT s.id, s.label, s.type, s.source, s.department_id, d.code AS department_code
            FROM sites s JOIN departments d ON d.id = s.department_id`
       )
     : pool.query(
-        `SELECT s.id, s.label, s.type, s.department_id, d.code AS department_code
+        `SELECT s.id, s.label, s.type, s.source, s.department_id, d.code AS department_code
            FROM sites s JOIN departments d ON d.id = s.department_id
           WHERE s.department_id = ANY($1)`,
         [scopeDeptIds]

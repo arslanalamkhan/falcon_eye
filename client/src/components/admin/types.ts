@@ -34,6 +34,19 @@ export type DepartmentRow = {
   oversight_targets: OversightTarget[]
 }
 
+/** A terminal reporting to FMS that no site is registered for yet */
+export type UnregisteredTerminal = {
+  mobile_id: string
+  asset_name: string
+  last_report_type: string
+  lat: number
+  lng: number
+  report_count: number
+  first_seen: string
+  last_seen: string
+  alarm_recent: boolean
+}
+
 export type AuditEntry = {
   id: number; actor_id: number | null; actor_email: string | null; actor_name: string | null
   department_id: number | null; department_code: string | null

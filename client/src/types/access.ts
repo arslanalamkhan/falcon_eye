@@ -15,11 +15,13 @@ export type Department = {
 }
 
 export type SiteType = 'train' | 'mine' | 'other'
+export type SiteSource = 'cellular' | 'satellite_fms'
 
 export type VisibleSite = {
   id: string
   label: string
   type: SiteType
+  source: SiteSource
   department_id: number
   department_code: string
 }

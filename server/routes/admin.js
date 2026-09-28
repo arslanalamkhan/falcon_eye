@@ -1,6 +1,6 @@
 const express  = require('express')
 const pool     = require('../db')
-const { requireAuth, adminOnly } = require('../middleware/auth')
+const { requireAuth, adminOnly, superOnly } = require('../middleware/auth')
 const { syncRoutingToFirebase }  = require('../services/routingSync')
 const { audit } = require('../services/audit')
 const {
@@ -226,6 +226,34 @@ router.delete('/receivers/:id', adminOnly, async (req, res) => {
     await syncRoutingToFirebase()
     await audit(req.user, 'receiver.delete', 'receiver', req.params.id, null)
     res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ── GET /api/admin/fms/unregistered — terminals reporting but not registered ─
+// Super admin only: an unregistered terminal belongs to no department yet,
+// so showing it to a dept admin would leak another agency's asset.
+// fmsSync parks these reports (15-day window) and adopts them into
+// fms_position_history as soon as a site is registered with the MobileID.
+router.get('/fms/unregistered', superOnly, async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT m.mobile_id,
+             (array_agg(m.asset_name  ORDER BY m.received_at DESC, m.reference_id DESC))[1] AS asset_name,
+             (array_agg(m.report_type ORDER BY m.received_at DESC, m.reference_id DESC))[1] AS last_report_type,
+             (array_agg(m.lat         ORDER BY m.received_at DESC, m.reference_id DESC))[1] AS lat,
+             (array_agg(m.lng         ORDER BY m.received_at DESC, m.reference_id DESC))[1] AS lng,
+             COUNT(*)::int      AS report_count,
+             MIN(m.received_at) AS first_seen,
+             MAX(m.received_at) AS last_seen,
+             BOOL_OR(m.report_type = 'Ship_Security_Alert' AND m.received_at > NOW() - INTERVAL '45 minutes') AS alarm_recent
+        FROM fms_unmatched_messages m
+       WHERE m.mobile_id NOT IN (SELECT mobile_id FROM fms_assets)
+       GROUP BY m.mobile_id
+       ORDER BY alarm_recent DESC, last_seen DESC
+    `)
+    res.json(rows)
   } catch (err) {
     res.status(500).json({ error: err.message })
   }

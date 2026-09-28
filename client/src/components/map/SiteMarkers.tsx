@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react"
 import { Link } from "react-router-dom"
 import { Marker, Popup, Tooltip } from "react-leaflet"
 import L from "leaflet"
-import { Camera, Clock, Gauge, MapPin } from "lucide-react"
+import { Camera, Clock, Gauge, MapPin, Route } from "lucide-react"
 import { SiteStatusBadge } from "@/components/sites/site-ui"
 import { siteState } from "@/lib/sites"
 import { formatCoords, timeAgo } from "@/lib/format"
@@ -29,10 +29,12 @@ function markerIcon(state: "alert" | "live" | "fallback", selected: boolean): L.
   return icon
 }
 
-export function SiteMarkers({ sites, selectedId, onSelect }: {
+export function SiteMarkers({ sites, selectedId, onSelect, onShowTrack }: {
   sites: SiteData[]
   selectedId: string | null
   onSelect: (id: string) => void
+  /** Offered for satellite (FMS) sites, which keep a 15-day position history */
+  onShowTrack: (id: string) => void
 }) {
   const markers = useRef<Record<string, L.Marker | null>>({})
 
@@ -89,12 +91,23 @@ export function SiteMarkers({ sites, selectedId, onSelect }: {
                     <dd>GPS updated {timeAgo(site.gps?.updated)}</dd>
                   </div>
                 </dl>
-                <Link
-                  to={`/cameras?site=${encodeURIComponent(site.id)}`}
-                  className="flex h-8 items-center justify-center gap-1.5 rounded-md border border-border bg-accent/50 text-xs font-medium !text-foreground transition-colors hover:bg-accent"
-                >
-                  <Camera className="h-3.5 w-3.5" /> View cameras
-                </Link>
+                <div className="flex gap-2">
+                  <Link
+                    to={`/cameras?site=${encodeURIComponent(site.id)}`}
+                    className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-md border border-border bg-accent/50 text-xs font-medium !text-foreground transition-colors hover:bg-accent"
+                  >
+                    <Camera className="h-3.5 w-3.5" /> Cameras
+                  </Link>
+                  {site.source === "satellite_fms" && (
+                    <button
+                      type="button"
+                      onClick={() => onShowTrack(site.id)}
+                      className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-md border border-info/30 bg-info/10 text-xs font-medium text-info transition-colors hover:bg-info/20"
+                    >
+                      <Route className="h-3.5 w-3.5" /> 15-day track
+                    </button>
+                  )}
+                </div>
               </div>
             </Popup>
           </Marker>
