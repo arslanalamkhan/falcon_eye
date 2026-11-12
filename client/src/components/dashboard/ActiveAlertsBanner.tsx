@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom"
 import { Siren, LocateFixed, Camera } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { FmsResetButton } from "@/components/sites/FmsResetButton"
 import { useNow } from "@/hooks/useNow"
 import { formatCoords, timeAgo, pluralize } from "@/lib/format"
 import type { SiteData } from "@/hooks/useFirebaseData"
@@ -39,7 +40,17 @@ export function ActiveAlertsBanner({ sites }: { sites: SiteData[] }) {
                 <span>{formatCoords(s.gps?.lat, s.gps?.lng)}</span>
               </p>
             </div>
-            <div className="flex shrink-0 gap-2">
+            <div className="flex shrink-0 flex-wrap gap-2">
+              {s.source === "satellite_fms" && (
+                <FmsResetButton
+                  siteId={s.id}
+                  siteLabel={s.label}
+                  alert
+                  size="sm"
+                  variant="outline"
+                  className="w-full border-danger/40 text-danger hover:bg-danger/10 sm:w-auto"
+                />
+              )}
               <Button asChild size="sm" className="flex-1 bg-danger text-danger-foreground hover:bg-danger/90 sm:flex-none">
                 <Link to={`/map?site=${encodeURIComponent(s.id)}`}><LocateFixed /> Locate</Link>
               </Button>

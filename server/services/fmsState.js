@@ -9,7 +9,14 @@
 //   reset. Only the FIRST alert of an incident is the onset: it raises the
 //   alarm and sets last_alert. Later ones are repeats — position update +
 //   an 'alert_repeat' log entry, never a new trigger time or a new "alert".
-// - SSAS_Reset_Acknowledgement clears the alarm.
+// - SSAS_Reset_Acknowledgement clears the alarm. It also remains the fallback
+//   that clears it if a remote reset command times out but the terminal resets.
+// - Remote reset (fmsCommands.js writes sites/{id}/fms_reset_at): while NOT in
+//   alarm, a Ship_Security_Alert received at or before that time is a late
+//   repeat of the alarm we already reset — history only, logged
+//   'alert_repeat', no onset. A newer one is a genuine new incident. A
+//   terminal acknowledgement after a remote reset just logs
+//   'reset_acknowledged' (alert is already false).
 // - If an onset and its reset arrive in the same poll batch, writing only
 //   the final state would mean Firebase never shows alert=true, so
 //   alertRouter never buzzes a receiver. When the onset is fresh we stop at
@@ -31,8 +38,9 @@ function gpsStatus(receivedMs, nowMs, staleMs) {
 }
 
 /**
- * @param {{ alert: boolean, lastAlert?: string }} current   the site's state before this batch
- *        (from Firebase). lastAlert lets a re-processed onset be recognised as itself.
+ * @param {{ alert: boolean, lastAlert?: string, resetAtMs?: number }} current   the site's state before this batch
+ *        (from Firebase). lastAlert lets a re-processed onset be recognised as itself;
+ *        resetAtMs (epoch ms of sites/{id}/fms_reset_at) marks the last remote reset.
  * @param {Array<{ referenceId: number, type: string, lat: number, lng: number,
  *                 speedKmh: string, receivedAt: string, receivedMs: number }>} messages
  *        this site's messages, ascending referenceId
@@ -73,7 +81,10 @@ function reduceSite(current, messages, { nowMs, recentMs, staleMs }) {
 
     let event = null
     if (m.type === REPORT.ALERT) {
-      if (!alert) {
+      if (!alert && current.resetAtMs && m.receivedMs <= current.resetAtMs) {
+        // Late delivery of an alarm we already reset remotely — not a new incident
+        event = 'alert_repeat'
+      } else if (!alert) {
         alert = true
         freshOnsetInBatch = nowMs - m.receivedMs <= recentMs
         out.patch.alert = 'true'

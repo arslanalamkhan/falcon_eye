@@ -32,7 +32,9 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
     <ConfirmContext.Provider value={confirm}>
       {children}
       <Dialog open={options !== null} onOpenChange={(open) => { if (!open) settle(false) }}>
-        <DialogContent size="sm" hideClose>
+        {/* Above the alert takeover (z-[60]) — a confirmation always answers the
+            click that opened it, including "Reset alarm" inside AlertPopup */}
+        <DialogContent size="sm" hideClose className="z-[70]" overlayClassName="z-[70]">
           <DialogHeader
             icon={destructive ? TriangleAlert : CircleHelp}
             iconClassName={destructive ? "border-danger/25 bg-danger/10 text-danger" : undefined}

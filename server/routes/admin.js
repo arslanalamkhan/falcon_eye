@@ -23,17 +23,21 @@ router.get('/data', async (req, res) => {
 
     const sitesQuery = allSites
       ? pool.query(
-          `SELECT s.*, u.full_name AS owner_name, d.code AS department_code, d.name AS department_name
+          `SELECT s.*, u.full_name AS owner_name, d.code AS department_code, d.name AS department_name,
+                  COALESCE(fa.test_mode, false) AS fms_test_mode, fa.mobile_id AS fms_mobile_id
              FROM sites s
              LEFT JOIN users u ON u.id = s.owner_id
              JOIN departments d ON d.id = s.department_id
+             LEFT JOIN fms_assets fa ON fa.site_id = s.id
             ORDER BY s.type, s.label`
         )
       : pool.query(
-          `SELECT s.*, u.full_name AS owner_name, d.code AS department_code, d.name AS department_name
+          `SELECT s.*, u.full_name AS owner_name, d.code AS department_code, d.name AS department_name,
+                  COALESCE(fa.test_mode, false) AS fms_test_mode, fa.mobile_id AS fms_mobile_id
              FROM sites s
              LEFT JOIN users u ON u.id = s.owner_id
              JOIN departments d ON d.id = s.department_id
+             LEFT JOIN fms_assets fa ON fa.site_id = s.id
             WHERE s.id = ANY($1)
             ORDER BY s.type, s.label`,
           [siteIds]

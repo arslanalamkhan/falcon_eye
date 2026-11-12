@@ -132,3 +132,39 @@ test('gpsStatus boundary', () => {
   assert.equal(gpsStatus(NOW - 60 * MIN, NOW, 60 * MIN), 'live')
   assert.equal(gpsStatus(NOW - 60 * MIN - 1, NOW, 60 * MIN), 'fallback')
 })
+
+// ── Remote reset (current.resetAtMs) ─────────────────────────────────
+const RESET_AT = Date.parse('2026-09-28T10:20:00Z')
+
+test('remote reset: a late alert at/before the reset time is a repeat, no onset', () => {
+  const late = msg(ALERT, '2026-09-28T10:15:00Z')
+  const atReset = msg(ALERT, '2026-09-28T10:20:00Z')
+  const r = reduceSite({ alert: false, resetAtMs: RESET_AT }, [late, atReset], OPTS)
+  assert.equal(r.alert, false)
+  assert.equal(r.patch.alert, undefined)
+  assert.equal(r.patch.last_alert, undefined)
+  assert.deepEqual(r.logs.map((l) => l.event), ['alert_repeat', 'alert_repeat'])
+  assert.equal(r.history.length, 2, 'still recorded in history')
+  assert.equal(r.patch.gps.updated, atReset.receivedAt, 'position still updates')
+})
+
+test('remote reset: a newer alarm after the reset raises a real onset', () => {
+  const r = reduceSite({ alert: false, resetAtMs: RESET_AT }, [msg(ALERT, '2026-09-28T10:25:00Z')], OPTS)
+  assert.equal(r.alert, true)
+  assert.equal(r.patch.alert, 'true')
+  assert.equal(r.patch.last_alert, '2026-09-28T10:25:00.000Z')
+  assert.deepEqual(r.logs.map((l) => l.event), ['alert'])
+})
+
+test('without resetAtMs an alert while clear is still an onset', () => {
+  const r = reduceSite({ alert: false }, [msg(ALERT, '2026-09-28T10:15:00Z')], OPTS)
+  assert.equal(r.patch.alert, 'true')
+  assert.deepEqual(r.logs.map((l) => l.event), ['alert'])
+})
+
+test('terminal acknowledgement after a remote reset just logs', () => {
+  const r = reduceSite({ alert: false, resetAtMs: RESET_AT }, [msg(RESET, '2026-09-28T10:22:00Z')], OPTS)
+  assert.equal(r.alert, false)
+  assert.equal(r.patch.alert, undefined)
+  assert.deepEqual(r.logs.map((l) => l.event), ['reset_acknowledged'])
+})

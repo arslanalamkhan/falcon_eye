@@ -31,13 +31,15 @@ const SIZES = {
  * Bottom sheet on phones (thumb-reachable, full width), centered modal
  * from `sm` up. Scrolls internally when content is taller than the screen.
  */
-function DialogContent({ className, children, size = "md", hideClose, ...props }: React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
+function DialogContent({ className, overlayClassName, children, size = "md", hideClose, ...props }: React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
   size?: keyof typeof SIZES
   hideClose?: boolean
+  /** e.g. a higher z-index for dialogs that must stack above the alert takeover */
+  overlayClassName?: string
 }) {
   return (
     <DialogPrimitive.Portal>
-      <DialogOverlay />
+      <DialogOverlay className={overlayClassName} />
       <DialogPrimitive.Content
         className={cn(
           "fixed z-50 flex w-full flex-col border-border bg-popover text-popover-foreground shadow-pop focus:outline-none",

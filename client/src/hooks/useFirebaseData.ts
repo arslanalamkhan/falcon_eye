@@ -19,6 +19,8 @@ export type SiteData = {
   /** 'satellite_fms' sites have a 15-day position history (map track) */
   source?: SiteSource
   department_code?: string
+  /** Satellite terminal in SSAS test mode — a panic press won't raise a real alert */
+  fms_test_mode?: boolean
   /**
    * false when the site is registered (PostgreSQL) but its device has
    * never written to Firebase — shown as "Awaiting first report" rather
@@ -141,6 +143,7 @@ export function useFirebaseData() {
         type: s.type,
         source: s.source,
         department_code: s.department_code,
+        fms_test_mode: s.fms_test_mode,
         reported: !!fb,
         alert: fb?.alert ?? false,
         status: fb?.status ?? "",

@@ -2,11 +2,13 @@ import { useState, useEffect, useRef, useMemo } from "react"
 import { ref, onValue } from "firebase/database"
 import { db } from "@/lib/firebase"
 import { useAuth } from "@/contexts/AuthContext"
+import type { SiteSource } from "@/types/access"
 
 export type AlertEvent = {
   siteId:     string
   siteLabel:  string
   department?: string
+  source?:    SiteSource
   lat?:       string
   lng?:       string
   gpsStatus?: string
@@ -29,8 +31,8 @@ export function useAlertNotification() {
   const { access } = useAuth()
 
   const siteMeta = useMemo(() => {
-    const map = new Map<string, { label: string; department: string }>()
-    for (const s of access?.sites ?? []) map.set(s.id, { label: s.label, department: s.department_code })
+    const map = new Map<string, { label: string; department: string; source: SiteSource }>()
+    for (const s of access?.sites ?? []) map.set(s.id, { label: s.label, department: s.department_code, source: s.source })
     return map
   }, [access])
 
@@ -57,6 +59,7 @@ export function useAlertNotification() {
           siteId:      id,
           siteLabel:   meta?.label ?? site.label ?? id,
           department:  meta?.department,
+        source:      meta?.source,
           lat:         site.gps?.lat,
           lng:         site.gps?.lng,
           gpsStatus:   site.gps?.status,

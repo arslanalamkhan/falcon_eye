@@ -26,8 +26,9 @@ const { reconcileAlertHistory } = require('./fmsReconcile')
 
 const KNOTS_TO_KMH = 1.852
 const MIN = 60_000
-// FMS allows 10 requests / 5 min per key — one per 30s is the ceiling.
-// The 60s default uses half, leaving headroom for restarts and manual checks.
+// FMS allows 10 requests / 5 min per key, shared with operator commands
+// (fmsClient's fmsBudget) — one poll per 30s is the ceiling. The 60s default
+// uses half, leaving headroom for restarts and remote commands.
 const MIN_INTERVAL_MS = 30_000
 
 function loadConfig() {
@@ -221,7 +222,7 @@ async function processNewMessages(rtdb, cfg) {
   for (const [siteId, { asset, messages }] of bySite) {
     const site = (await rtdb.ref(`sites/${siteId}`).get()).val() || {}
     const r = reduceSite(
-      { alert: site.alert === 'true', lastAlert: site.last_alert },
+      { alert: site.alert === 'true', lastAlert: site.last_alert, resetAtMs: Date.parse(site.fms_reset_at) || undefined },
       messages,
       { nowMs, recentMs: cfg.recentMs, staleMs: cfg.staleMs }
     )
@@ -343,7 +344,12 @@ function startFmsSync() {
     try {
       await processTick(rtdb, cfg)
     } catch (err) {
-      console.error('[FMS] Sync tick failed:', err.message)
+      if (err.kind === 'rate_limit' && err.fmsCode === 429) {
+        // Our own shared budget (operator commands) refused the poll — not an FMS error
+        console.log('[FMS] Poll skipped this tick — shared request budget is in use')
+      } else {
+        console.error('[FMS] Sync tick failed:', err.message)
+      }
     }
     setTimeout(loop, cfg.intervalMs)
   }

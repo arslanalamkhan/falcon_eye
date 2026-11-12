@@ -25,6 +25,12 @@ const VERBS: Record<string, string> = {
 function describe(action: string): { text: string; tone: "danger" | "success" | "default" } {
   if (action === "user.sites.update")    return { text: "Updated site access for user", tone: "default" }
   if (action === "user.password_reset")  return { text: "Reset password for user", tone: "default" }
+  if (action === "fms.reset")            return { text: "Sent remote alarm reset to site", tone: "default" }
+  if (action === "fms.reset.completed")  return { text: "Remote alarm reset delivered to site", tone: "success" }
+  if (action === "fms.reset.failed")     return { text: "Remote alarm reset failed for site", tone: "danger" }
+  if (action === "fms.poll_position")    return { text: "Requested position from site", tone: "default" }
+  if (action === "fms.test_mode_on")     return { text: "Turned SSAS test mode on for site", tone: "default" }
+  if (action === "fms.test_mode_off")    return { text: "Turned SSAS test mode off for site", tone: "default" }
   const [entity, verb] = action.split(".")
   const text = `${VERBS[verb] ?? verb ?? "Changed"} ${entity}`
   return { text, tone: verb === "delete" || verb === "disable" ? "danger" : verb === "create" || verb === "enable" ? "success" : "default" }

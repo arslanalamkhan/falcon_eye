@@ -5,6 +5,8 @@ export type Site = {
   id: string; label: string; type: string; region: string; active: boolean
   source: string; owner_id: number | null; owner_name: string | null
   department_id: number; department_code: string; department_name: string
+  /** FMS satellite sites only — terminal is in SSAS web test mode */
+  fms_test_mode: boolean; fms_mobile_id: string | null
 }
 
 export type Receiver = {

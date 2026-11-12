@@ -2,7 +2,14 @@ import { useEffect, useRef } from "react"
 import { Link } from "react-router-dom"
 import { Marker, Popup, Tooltip } from "react-leaflet"
 import L from "leaflet"
-import { Camera, Clock, Gauge, MapPin, Route } from "lucide-react"
+import { Camera, Clock, Gauge, MapPin, Route, LocateFixed } from "lucide-react"
+import { toast } from "sonner"
+import { useAuth } from "@/contexts/AuthContext"
+import { useFmsCommands } from "@/hooks/useFmsCommands"
+import { FmsResetButton } from "@/components/sites/FmsResetButton"
+import { Badge } from "@/components/ui/badge"
+import { errorMessage } from "@/lib/utils"
+import { isAdminRole } from "@/types/access"
 import { SiteStatusBadge } from "@/components/sites/site-ui"
 import { siteState } from "@/lib/sites"
 import { formatCoords, timeAgo } from "@/lib/format"
@@ -27,6 +34,43 @@ function markerIcon(state: "alert" | "live" | "fallback", selected: boolean): L.
     iconCache.set(key, icon)
   }
   return icon
+}
+
+/** Satellite-only popup extras (hooks can't run per-marker conditionally, so this is its own component). */
+function FmsPopupActions({ site }: { site: SiteData }) {
+  const { user } = useAuth()
+  const admin = isAdminRole(user?.role)
+  const { pendingPoll, pollPosition } = useFmsCommands(site.id, admin)
+
+  const onPoll = async () => {
+    try {
+      await pollPosition()
+      toast.success("Position requested", {
+        description: "It appears on the map when the terminal reports, usually within a few minutes.",
+      })
+    } catch (err) {
+      toast.error("Couldn't request position", { description: errorMessage(err) })
+    }
+  }
+
+  return (
+    <>
+      {site.fms_test_mode && <Badge variant="warning" size="sm">Test mode</Badge>}
+      {site.alert && (
+        <FmsResetButton siteId={site.id} siteLabel={site.label} alert size="sm" className="w-full" />
+      )}
+      {admin && (
+        <button
+          type="button"
+          onClick={onPoll}
+          disabled={!!pendingPoll}
+          className="flex h-9 w-full items-center justify-center gap-1.5 rounded-md border border-border bg-accent/50 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-60"
+        >
+          <LocateFixed className="h-3.5 w-3.5" /> {pendingPoll ? "Position requested…" : "Request position"}
+        </button>
+      )}
+    </>
+  )
 }
 
 export function SiteMarkers({ sites, selectedId, onSelect, onShowTrack }: {
@@ -108,6 +152,9 @@ export function SiteMarkers({ sites, selectedId, onSelect, onShowTrack }: {
                     </button>
                   )}
                 </div>
+                {site.source === "satellite_fms" && (
+                  <div className="space-y-2"><FmsPopupActions site={site} /></div>
+                )}
               </div>
             </Popup>
           </Marker>

@@ -92,13 +92,17 @@ falcon_eye/
 │   │   ├── users.js                # /api/users/* — user CRUD, role/active changes, site grants
 │   │   ├── admin.js               # /api/admin/* — sites, receivers, routing CRUD, audit log
 │   │   ├── cameras.js             # /api/cameras/* — camera CRUD
-│   │   └── streams.js             # /api/streams/* — HLS stream start/status/stop
+│   │   ├── streams.js             # /api/streams/* — HLS stream start/status/stop
+│   │   └── fms.js                 # /api/fms/* — satellite terminal commands (reset, poll position, test mode)
 │   ├── services/
 │   │   ├── firebase.js            # Shared Firebase Admin singleton (getFirebaseDb)
 │   │   ├── access.js              # Department-scoped visibility + management-permission checks
 │   │   ├── audit.js               # Fire-and-forget audit_log writer
 │   │   ├── alertRouter.js         # Watches sites/ in Firebase, dispatches to hq_receivers/
-│   │   └── routingSync.js         # Syncs PostgreSQL routing table → Firebase routing/ node
+│   │   ├── routingSync.js         # Syncs PostgreSQL routing table → Firebase routing/ node
+│   │   ├── fmsClient.js           # FMS v2 API client + shared rate-limit budget
+│   │   ├── fmsSync.js / fmsState.js / fmsReconcile.js  # FMS position + alarm feed → Firebase
+│   │   └── fmsCommands.js         # FMS remote commands + delivery tracker
 │   └── scripts/
 │       ├── setup-db.js            # One-time DB bootstrap + admin user seed
 │       ├── 002_routing_schema.js  # Adds sites, hq_receivers, site_receiver_routes tables
@@ -128,13 +132,14 @@ node server/scripts/005_ownership_hierarchy.js  # Add owner_id + site_visibility
 node server/scripts/006_fms_integration_schema.js # Add FMS satellite tracking tables (run once)
 node server/scripts/007_departments.js    # Add department model (departments, roles, audit_log) — run once
 node server/scripts/008_fms_unmatched_messages.js # Park reports from unregistered FMS terminals — run once
+node server/scripts/009_fms_commands.js   # FMS remote commands (reset / poll / test mode) — run once
 
 # ── Start servers (two separate terminals) ─────────────────────────
 node server/index.js                     # API + alertRouter on port 3001
 cd client && npx vite                    # Frontend on port 5173
 
 # ── Tests ──────────────────────────────────────────────────────────
-npm test                                 # node:test — server/**/*.test.js (FMS state machine)
+npm test                                 # node:test — server/**/*.test.js (FMS client, state machine, commands)
 
 # ── FMS maintenance ────────────────────────────────────────────────
 node server/scripts/fms_reconcile.js          # preview alert-data repairs (dry run)
@@ -168,7 +173,9 @@ FMS_API_KEY=<from Falcon Mega Track>     # sync is disabled when unset
 FMS_POLL_INTERVAL_MS=60000               # default 60s; clamped to ≥ 30000 (API limit: 10 req / 5 min)
 FMS_STALE_AFTER_MIN=60                   # no report for this long → GPS shown as last-known
 FMS_REQUEST_TIMEOUT_MS=20000             # per request
-# FMS_API_BASE_URL=...                   # override only if FMS changes its endpoint
+FMS_RATE_LIMIT=10                        # requests per 5 min the key allows (shared budget, all endpoints)
+FMS_COMMAND_TIMEOUT_MS=180000            # stop waiting for a reset/poll delivery confirmation after this
+# FMS_API_BASE_URL=...                   # v2 base (…/api/v2/json/SecureAccessData) — override only if FMS moves it
 ```
 
 ### `client/.env` (Vite — must use `VITE_` prefix)
@@ -196,6 +203,7 @@ Neither `.env` file is committed. The Firebase Admin service account key (`serve
     reset           STRING   "true" | "false"      ← written by HQ receiver on acknowledge
     status          STRING   "standby" | "alert"
     last_alert      STRING   ISO timestamp
+    fms_reset_at    STRING   ISO timestamp         ← FMS sites only: last remote reset confirmed by the terminal
     gps/
         lat         STRING   decimal degrees
         lng         STRING   decimal degrees
@@ -223,6 +231,7 @@ Neither `.env` file is committed. The Firebase Admin service account key (`serve
     event       STRING   "alert"              ← incident onset (ESP32 press / first FMS SSAS alarm)
                          "alert_repeat"       ← FMS: SSAS re-sent every ~15 min while active — NOT a new incident
                          "reset" | "reset_acknowledged" | "test_alert"
+                         "reset_remote"       ← FMS: alarm reset from the web app, confirmed delivered to the terminal
                          (the web app only counts/lists "alert" — never add repeats to alert counts)
     timestamp   STRING   ISO datetime
     lat         STRING
@@ -353,6 +362,12 @@ site_id, reference_id, lat, lng, speed_kmh, report_type, received_at
 
 -- fms_unmatched_messages (008) — reports from terminals with no fms_assets row yet, 15-day window;
 --   adopted into fms_position_history once a site is registered with that mobile_id
+
+-- fms_assets.test_mode / test_mode_changed_at (009) — SSAS web test mode, as last set through the API
+-- fms_commands (009) — remote commands sent to terminals + delivery tracking
+id SERIAL, site_id, mobile_id, kind ('reset'|'poll_position'|'test_mode_on'|'test_mode_off'),
+status ('pending'|'completed'|'failed'|'timed_out'), forward_message_id, forward_status,
+error_code, description, requested_by, created_at, updated_at, completed_at
 reference_id PK, mobile_id, asset_name, report_type, lat, lng, speed_kmh, received_at
 ```
 
@@ -446,6 +461,10 @@ A user's "universe" is their department's view-scope resolution. Operators are a
 | DELETE | `/api/admin/receivers/:id` | ✓ admin | Remove a receiver |
 | GET | `/api/admin/audit` | ✓ admin | Audit trail (super: system-wide; dept admin: own dept) |
 | GET | `/api/admin/fms/unregistered` | ✓ super | FMS terminals reporting with no registered site (`alarm_recent` flags an active alarm) |
+| GET | `/api/fms/sites/:siteId/commands` | ✓ | Test-mode flag + last 24 h of remote commands for a visible satellite site |
+| POST | `/api/fms/sites/:siteId/reset` | ✓ | Send `ResetSsasToNormal` (site must be in alarm unless super) → 202; 409 pending/busy, 429 rate budget |
+| POST | `/api/fms/sites/:siteId/poll-position` | ✓ admin | Ask the terminal for a fresh position fix → 202 |
+| POST | `/api/fms/sites/:siteId/test-mode` | ✓ super | `{enabled}` — SSAS web test mode on/off |
 | GET | `/api/cameras?siteId=x` | ✓ | Cameras for a site (no passwords) |
 | GET | `/api/cameras/all` | ✓ | All cameras in scope, with site + department info |
 | POST | `/api/cameras` | ✓ admin | Add a camera (must manage the parent site) |
@@ -629,10 +648,20 @@ Shadcn UI pattern — components are owned code in `src/components/ui/`, not a b
 
 Some sites are tracked by an Inmarsat IDP satellite terminal instead of an ESP32. `server/services/fmsSync.js` polls the FMS cloud API and writes those sites into Firebase `sites/{id}` exactly like an ESP32 would, so the alert router, map and dashboard need no special cases. FMS field names are maritime (IMO, MMSI, `Ship_Security_Alert` = SSAS panic) because the platform was built for ships.
 
-### The API (`server/services/fmsClient.js`)
-- `GET …/GetTrackingDataByReferenceID/{FMS_API_KEY}/{cursor}` → `{ ErrorCode, AssetPosition[], NextReferenceID }`
+### The API (`server/services/fmsClient.js`) — v2, "SecureAccessData"
+Base `https://falconmegatrack.com/api/v2/json/SecureAccessData`; every call sends header `Authorization: api_key <FMS_API_KEY>` (the key is never in the URL). Success is `ErrorCode` 0 or 200; errors arrive as an HTTP status or a body `ErrorCode` and are thrown as `FmsApiError` with a `kind` (`rate_limit`, `busy` = 651 "call already in process, wait 5 min", `unreachable` = 601, `not_found`, `forbidden`, `auth` = 401 IP not allow-listed, …).
+
+| Endpoint | Used for |
+|---|---|
+| `GET /GetTrackingDataByReferenceID/{cursor}` → `{ ErrorCode, AssetPosition[], NextReferenceID }` | the sync loop below |
+| `POST /ResetSsasToNormal/{mobileID}` → `ForwardMessageID` | remote alarm reset |
+| `GET /GetForwardMessageStatus/{mobileID}/{fwdId}` → `ForwardMessageStatus` | delivery tracking (`SUBMITTED`/`WAITING` → keep polling, `RECEIVED` → done, `ERROR`/`DELIVERY_FAILED`/`TIMED_OUT`/`CANCELLED`/`NA` → failed; may come as a name or a digit 0–8) |
+| `GET /PollCurrentPosition/{mobileID}` → `ForwardMessageID` | "Request position" — the fix arrives later in the normal feed |
+| `POST /SetSsasWebTestModeON/{mobileID}`, `/SetSsasWebTestModeOff/{mobileID}` | SSAS test procedure (super admin) |
+
 - **Cursor-based and inclusive**: returns every message with `ReferenceID >= cursor`. FMS retains history, so rewinding the cursor replays messages (cursor `-1` returns everything retained).
-- **Rate limit: 10 requests per 5 minutes per key** (HTTP 403 "API call limit exceeded"). Every process using the key shares that budget — **run exactly one server per key**, and don't run ad-hoc API probes in a tight loop. The poll interval is clamped to ≥ 30s; the 60s default uses half the budget.
+- **Rate limit: 10 requests per 5 minutes per key** (HTTP 403 "API call limit exceeded"). It is assumed to be shared across all endpoints. Every process using the key shares that budget — **run exactly one server per key**, and don't run ad-hoc API probes in a tight loop (never probe the command endpoints at all — they act on a real terminal). The poll interval is clamped to ≥ 30s; the 60s default uses half the budget.
+- **`fmsBudget`** (in `fmsClient.js`) is the in-process sliding window (`FMS_RATE_LIMIT`, default 10 / 5 min) every call goes through, by priority: a user command needs 1 free slot, a tracking poll 2 (always leaves one for a click), a delivery-status check 3. A refused tracking poll just skips that tick; a refused command returns **429** with `retry_after_s`.
 - Message fields: `AssetName, IMO, MMSI, MobileID, PositionReportType, Network, ReferenceID, Latitude, Longitude, Speed, SpeedUnit (knots), Heading, CourseOverGround, ReceivedOn_UnixUTC, ReceivedOn_UTC`
 - Terminals have no fixed heartbeat — a stationary terminal can be silent for days; an active SSAS alarm is re-sent every ~15 min until the terminal is reset.
 
@@ -651,12 +680,21 @@ Some sites are tracked by an Inmarsat IDP satellite terminal instead of an ESP32
 
 On start, `fmsReconcile.js` replays stored history through the same state machine and repairs Firebase data written by the pre-fix sync (onset time, repeats logged as alerts). It's idempotent.
 
-### Alarms are cleared only by the terminal (for now)
-An HQ receiver's acknowledgement (`sites/{id}/reset`) does **not** clear an FMS alarm — only `SSAS_Reset_Acknowledgement` from the terminal does, so routed receivers keep buzzing until then. A remote reset through an FMS API is planned (see Planned Features).
+### Remote commands (`server/services/fmsCommands.js`, `routes/fms.js`, table `fms_commands`)
+- **Reset alarm** — any user who can see the satellite site, while it's in alarm (super admins any time, for the test procedure). `ResetSsasToNormal` → row `pending` with its `forward_message_id`.
+- A DB-driven tracker (every 30 s, survives restarts) checks `GetForwardMessageStatus` until `RECEIVED` → `completed`, a failure status → `failed`, or `FMS_COMMAND_TIMEOUT_MS` (default 3 min, per FMS's guidance) → `timed_out`.
+- On a completed reset the backend writes `sites/{id}/alert="false"`, `status="standby"`, `fms_reset_at`, and a `"reset_remote"` log entry; `alertRouter` sees the transition and silences routed receivers.
+- `fmsState.js` treats a `Ship_Security_Alert` received at or before `fms_reset_at` as a late repeat (no new onset). The terminal's own `SSAS_Reset_Acknowledgement` still clears an alarm — also the fallback when a command times out but the terminal did reset.
+- **Request position** (`PollCurrentPosition`) — super admin / own-department admin.
+- **SSAS test procedure** — super admin only (Admin → Sites → ⋯ → SSAS test): test mode on → press Master Box button → reset → wait for `RECEIVED` → test mode off → repeat for Slave Box. `fms_assets.test_mode` tracks it; a **Test mode** badge warns that real panic presses won't alarm while it's on.
+- An HQ receiver's acknowledgement (`sites/{id}/reset`) still does **not** clear an FMS alarm — only the web reset or the terminal does. ESP32 sites are unchanged.
+- Every command is audited (`fms.reset`, `fms.reset.completed` / `.failed`, `fms.poll_position`, `fms.test_mode_on` / `_off`).
 
 ### UI
 - Admin → Sites: unregistered terminals callout (super admin), Satellite tracking badge
-- Live Map: satellite sites' popups offer a **15-day track** (`/api/admin/sites/:id/history`, drawn by `components/map/TrackLayer.tsx`)
+- Live Map: satellite sites' popups offer a **15-day track** (`/api/admin/sites/:id/history`, drawn by `components/map/TrackLayer.tsx`), **Reset alarm** while in alarm, and **Request position** for admins
+- Alert popup + dashboard active-alerts banner: **Reset alarm** for satellite alerts (`components/sites/FmsResetButton.tsx`, state from `hooks/useFmsCommands.ts`)
+- Admin → Sites: **Test mode** badge, row actions *Request position* and *SSAS test…* (super admin, `FmsTestDialog`)
 
 ---
 
@@ -691,7 +729,6 @@ Default endpoint is `openapi.easy4ip.com` (works globally for most accounts). Ch
 ## Planned Features (not yet built)
 
 - **Firebase lock-down (Phase B of the multi-department access model)** — mint per-user Firebase custom tokens from the backend (`POST /api/auth/firebase-token`), add RTDB security rules scoped to an `access/{uid}/{siteId}` node synced from PostgreSQL, and move the client off unauthenticated `sites/`/`logs/` reads. The ESP32 firmware uses a legacy database secret (bypasses security rules), so this is safe to do without touching device firmware. **The current database secret was shared in plaintext during planning and should be rotated** (Firebase console → Project settings → Service accounts → Database secrets) before or as part of this work.
-- **Remote FMS alarm reset** — clear a satellite terminal's SSAS alarm through the FMS API (endpoint details pending from Falcon Mega Track), triggered from HQ acknowledgement and/or the web UI
 - Alert history page with filters (site, severity, date range)
 - Train Network management page
 - Mining Sites management page

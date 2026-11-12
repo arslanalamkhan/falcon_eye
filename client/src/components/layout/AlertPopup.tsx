@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { usePersistentState } from "@/hooks/usePersistentState"
 import { useNow } from "@/hooks/useNow"
+import { FmsResetButton } from "@/components/sites/FmsResetButton"
 import { formatCoords, formatTime, timeAgo } from "@/lib/format"
 import type { AlertEvent } from "@/hooks/useAlertNotification"
 
@@ -60,7 +61,8 @@ function Detail({ icon: Icon, label, value, tone }: {
 /**
  * Full-screen panic alert takeover. The web app is read-only to Firebase,
  * so "Dismiss" only closes this popup — the alert itself stays active
- * (and on the dashboard/bell) until it's reset from the HQ receiver.
+ * (and on the dashboard/bell) until it's reset: at the HQ receiver for
+ * cellular sites, or remotely via the satellite terminal for FMS sites.
  */
 export default function AlertPopup({ alert, queueLength, onDismiss }: {
   alert: AlertEvent
@@ -82,6 +84,7 @@ export default function AlertPopup({ alert, queueLength, onDismiss }: {
   const remaining = queueLength - 1
   const gpsLive = alert.gpsStatus === "live"
   const hasCoords = !!alert.lat && !!alert.lng
+  const satellite = alert.source === "satellite_fms"
 
   const openAndDismiss = (to: string) => {
     navigate(to)
@@ -145,7 +148,9 @@ export default function AlertPopup({ alert, queueLength, onDismiss }: {
 
         <p id="alert-desc" className="mx-5 mt-3 flex items-start gap-2 rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground sm:mx-6">
           <Info className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
-          Routed HQ receivers have been notified. This alert stays active until it is reset from the receiver.
+          {satellite
+            ? "Routed HQ receivers have been notified. You can reset this alarm from here: the terminal is told to stop alarming, and receivers go quiet once it confirms (usually 1–3 minutes)."
+            : "Routed HQ receivers have been notified. This alert stays active until it is reset from the receiver."}
         </p>
 
         {/* Actions */}
@@ -161,6 +166,15 @@ export default function AlertPopup({ alert, queueLength, onDismiss }: {
           <Button variant="outline" onClick={() => openAndDismiss(`/cameras?site=${encodeURIComponent(alert.siteId)}`)}>
             <Camera /> Cameras
           </Button>
+          {satellite && (
+            <FmsResetButton
+              siteId={alert.siteId}
+              siteLabel={alert.siteLabel}
+              alert
+              variant="outline"
+              className="col-span-2 border-danger/40 text-danger hover:bg-danger/10"
+            />
+          )}
           <Button variant="secondary" onClick={onDismiss}>
             {remaining > 0 ? `Next alert (${remaining})` : "Dismiss"}
           </Button>

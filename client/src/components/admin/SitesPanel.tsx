@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
-import { Plus, TrainFront, Pickaxe, Radio, Satellite, Signal, MapPin, Camera, Trash2, MapPinOff, SearchX } from "lucide-react"
+import { Plus, TrainFront, Pickaxe, Radio, Satellite, Signal, MapPin, Camera, Trash2, MapPinOff, SearchX, Crosshair, FlaskConical } from "lucide-react"
 import { api } from "@/lib/api"
 import { errorMessage } from "@/lib/utils"
 import { useConfirm } from "@/hooks/useConfirm"
@@ -14,6 +14,7 @@ import { DataTable, RowActions, type Column } from "@/components/ui/data-table"
 import { DepartmentBadge, PanelToolbar, ReadOnlyHint } from "./shared"
 import { AddSiteDialog, type SitePrefill } from "./AddSiteDialog"
 import { UnregisteredTerminals } from "./UnregisteredTerminals"
+import { FmsTestDialog } from "./FmsTestDialog"
 import type { Site, DepartmentRow } from "./types"
 
 const TYPE_ICON: Record<string, React.ElementType> = { train: TrainFront, mine: Pickaxe, other: Radio }
@@ -32,6 +33,7 @@ export function SitesPanel({ sites, onRefresh, isSuper, currentDeptId, departmen
   const [prefill, setPrefill] = useState<SitePrefill | undefined>(undefined)
   const [dialogKey, setDialogKey] = useState(0)
   const [terminalsKey, setTerminalsKey] = useState(0)
+  const [testSite, setTestSite] = useState<Site | null>(null)
 
   const openAdd = (values?: SitePrefill) => {
     setPrefill(values)
@@ -64,6 +66,15 @@ export function SitesPanel({ sites, onRefresh, isSuper, currentDeptId, departmen
     }
   }
 
+  const requestPosition = async (s: Site) => {
+    try {
+      await api.post(`/api/fms/sites/${encodeURIComponent(s.id)}/poll-position`, {})
+      toast.success(`Position requested for ${s.label}`, { description: "The terminal's fix arrives in the live feed within a few minutes." })
+    } catch (err) {
+      toast.error("Couldn't request position", { description: errorMessage(err) })
+    }
+  }
+
   const columns: Column<Site>[] = [
     {
       id: "site", header: "Site", mobile: "title",
@@ -86,7 +97,12 @@ export function SitesPanel({ sites, onRefresh, isSuper, currentDeptId, departmen
     {
       id: "source", header: "Tracking",
       cell: (s) => s.source === "satellite_fms"
-        ? <Badge variant="info" size="sm"><Satellite /> Satellite</Badge>
+        ? (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge variant="info" size="sm"><Satellite /> Satellite</Badge>
+            {s.fms_test_mode && <Badge variant="warning" size="sm" dot="pulse">Test mode</Badge>}
+          </div>
+        )
         : <Badge variant="outline" size="sm"><Signal /> Cellular</Badge>,
     },
     { id: "region", header: "Region", cell: (s) => <span className="text-muted-foreground">{s.region || "—"}</span> },
@@ -123,6 +139,8 @@ export function SitesPanel({ sites, onRefresh, isSuper, currentDeptId, departmen
               actions={[
                 { label: "Show on map", icon: MapPin, onSelect: () => navigate(`/map?site=${encodeURIComponent(s.id)}`) },
                 { label: "View cameras", icon: Camera, onSelect: () => navigate(`/cameras?site=${encodeURIComponent(s.id)}`) },
+                { label: "Request position", icon: Crosshair, hidden: s.source !== "satellite_fms" || !canManage(s), onSelect: () => requestPosition(s) },
+                { label: "SSAS test…", icon: FlaskConical, hidden: s.source !== "satellite_fms" || !isSuper, onSelect: () => setTestSite(s) },
                 { label: "Delete site", icon: Trash2, destructive: true, separated: true, hidden: !canManage(s), onSelect: () => remove(s) },
               ]}
             />
@@ -139,6 +157,8 @@ export function SitesPanel({ sites, onRefresh, isSuper, currentDeptId, departmen
           )}
         />
       </Card>
+
+      <FmsTestDialog site={testSite} onClose={() => setTestSite(null)} onChanged={onRefresh} />
 
       <AddSiteDialog
         key={dialogKey}

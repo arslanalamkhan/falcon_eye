@@ -24,6 +24,8 @@ export type VisibleSite = {
   source: SiteSource
   department_id: number
   department_code: string
+  /** Satellite terminal is in SSAS web test mode (panic press sends a TEST, not a real alert) */
+  fms_test_mode?: boolean
 }
 
 export type Access = {
